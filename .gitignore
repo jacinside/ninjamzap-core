@@ -1,0 +1,55 @@
+# NinjamZap Core - GPL Repository .gitignore
+
+# Build artifacts
+build/
+DerivedData/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+
+# Compiled Object files
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+
+# Xcode
+project.xcworkspace
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Documentation build
+docs/_build/
+*.log
+
+# Test files
+test_output/
+*.test
+
+# Temporary files
+*.tmp
+*.bak
+*.old
