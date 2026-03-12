@@ -4,7 +4,7 @@
 
 NinjamZap is a mobile client for NINJAM (Network Jam sessions).
 
-**Copyright (C) 2025 Javier Cordero**
+**Copyright (C) 2025 Javier Alejandro Cordero**
 Licensed under GPL v3 - see LICENSE file
 
 ---

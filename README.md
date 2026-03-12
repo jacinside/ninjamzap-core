@@ -60,6 +60,6 @@ GNU General Public License v3.0. See [LICENSE](LICENSE).
 
 ```
 NinjamZap Core - GPL-licensed NINJAM Client
-Copyright (C) 2025 Javier Cordero
+Copyright (C) 2025 Javier Alejandro Cordero
 Based on NINJAM by Cockos/Justin Frankel
 ```

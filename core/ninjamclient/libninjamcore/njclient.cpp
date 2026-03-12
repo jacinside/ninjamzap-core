@@ -1817,7 +1817,7 @@ void NJClient::process_samples(float **inbuf, int innch, float **outbuf, int out
       else
         lc->m_curwritefile_curbuflen=0.0;
 
-      if (lc->bcast_active) 
+      if (lc->bcast_active)
       {
         lc->m_bq.AddBlock(sc_nch,0.0,src,len,src2);
         lc->m_curwritefile_curbuflen += len;
@@ -3147,8 +3147,8 @@ void RemoteDownload::Write(const void *buf, int len)
 }
 
 
-Local_Channel::Local_Channel() : channel_idx(0), src_channel(0), volume(1.0f), pan(0.0f), 
-                muted(false), solo(false), broadcasting(false), 
+Local_Channel::Local_Channel() : channel_idx(0), src_channel(0), volume(1.0f), pan(0.0f),
+                muted(false), solo(false), broadcasting(false),
 #ifndef NJCLIENT_NO_XMIT_SUPPORT
                 m_enc(NULL), 
                 m_enc_bitrate_used(0), 
