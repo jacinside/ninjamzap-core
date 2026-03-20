@@ -77,7 +77,7 @@ void NinjamClient_submitAudioDataForSync(NinjamClientRef* client, int32_t channe
 void NinjamClient_subscribeToAllChannel(NinjamClientRef* client);
 int32_t NinjamClient_getUserChannelState(NinjamClientRef* client, const char* username, int32_t channelIndex, float* volume,
                                          float* pan, int32_t* mute, int32_t* subscribed, bool* isStereo, int32_t* channelPairIndex);
-int32_t NinjamClient_setUserChannelState(NinjamClientRef* client, const char* username, int32_t channelIndex, float* volume, float* pan, int32_t* mute, int32_t* subscribed);
+int32_t NinjamClient_setUserChannelState(NinjamClientRef* client, const char* username, int32_t channelIndex, float* volume, float* pan, int32_t* mute, int32_t* subscribed, int32_t* solo);
 void NinjamClient_getUserChannelPeaks(NinjamClientRef* client, const char* username, int32_t channelIndex, float* left, float* right);
 int32_t NinjamClient_isUserSoloed(NinjamClientRef* client, const char* username);
 
@@ -91,6 +91,7 @@ void NinjamClient_sendPrivateMessage(NinjamClientRef* client, const char* userna
 void NinjamClient_sendAdminMessage(NinjamClientRef* client, const char* message);
 
 // User info
+const char* NinjamClient_getLocalUserName(NinjamClientRef* client);
 const char* NinjamClient_getUserName(NinjamClientRef* client, int32_t index);
 const char* NinjamClient_getUserChannelName(NinjamClientRef* client, const char* username, int32_t channelIndex);
 
@@ -115,13 +116,24 @@ typedef void (*DisconnectedCallback)(int32_t reason);
 typedef int32_t (*LicenseCallback)(const char* text);
 typedef void (*ChatCallback)(const char* username, const char* message);
 typedef void (*IntervalCallback)(int32_t bpm, int32_t bpi);
+// eventType: 0=begin, 1=data, 2=end
+typedef void (*RawDataRecvCallback)(int32_t eventType, const uint8_t* guid,
+                                     uint32_t fourcc, const char* username,
+                                     int32_t chidx, const void* data, int32_t dataLen);
 
 void NinjamClient_setCallback(NinjamClientRef* client, MessageCallback callback);
 void NinjamClient_setOnConnected(NinjamClientRef* client, ConnectedCallback callback);
 void NinjamClient_setOnDisconnected(NinjamClientRef* client, DisconnectedCallback callback);
 void NinjamClient_setLicenseCallback(NinjamClientRef* client, LicenseCallback callback);
+void NinjamClient_respondToLicense(int accepted);
+void NinjamClient_cancelPendingLicense(void);
 void NinjamClient_setChatCallback(NinjamClientRef* client, ChatCallback callback);
 void NinjamClient_setIntervalCallback(NinjamClientRef* client, IntervalCallback callback);
+
+// Raw data channel API
+void NinjamClient_setRawDataCallback(NinjamClientRef* client, RawDataRecvCallback callback);
+void NinjamClient_rawDataSendBegin(NinjamClientRef* client, uint8_t outGuid[16], uint32_t fourcc, int32_t chidx, int32_t estsize);
+void NinjamClient_rawDataSendWrite(NinjamClientRef* client, const uint8_t guid[16], const void* data, int32_t dataLen, int32_t isEnd);
 
 struct NinjamClientRef {
     void* adapter; // Changed from NJClientAdapter to NinjamClientAdapter
@@ -131,6 +143,7 @@ struct NinjamClientRef {
     LicenseCallback licenseCallback;
     ChatCallback chatCallback;
     IntervalCallback intervalCallback;
+    RawDataRecvCallback rawDataCallback;
 };
 
 

@@ -42,6 +42,7 @@ NinjamClientRef* NinjamClient_create(void) {
     client->licenseCallback = nullptr;
     client->chatCallback = nullptr;
     client->intervalCallback = nullptr;
+    client->rawDataCallback = nullptr;
     return client;
 }
 
@@ -500,6 +501,14 @@ void NinjamClient_setLocalChannelVolume(NinjamClientRef* client, int channelInde
         adapter->setLocalChannelVolume(channelIndex, volume);
     }
 }
+const char* NinjamClient_getLocalUserName(NinjamClientRef* client) {
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        return adapter->getLocalUserName();
+    }
+    return "";
+}
+
 const char* NinjamClient_getUserName(NinjamClientRef* client, int32_t index) {
     static const char* defaultName = "user";
     return defaultName;
@@ -586,7 +595,8 @@ int32_t NinjamClient_setUserChannelState(
     float* volume,
     float* pan,
     int32_t* mute,
-    int32_t* subscribed
+    int32_t* subscribed,
+    int32_t* solo
 ) {
   auto adapter = getAdapter(client);
   if (!adapter || !username) {
@@ -603,7 +613,7 @@ int32_t NinjamClient_setUserChannelState(
         volume != nullptr, volume ? *volume : 0.0f,
         pan != nullptr, pan ? *pan : 0.0f,
         mute != nullptr, mute ? (*mute != 0) : false,
-        false, false, // solo
+        solo != nullptr, solo ? (*solo != 0) : false,
         false, 0      // output channel
       );
 
@@ -657,6 +667,8 @@ void NinjamClient_setCallback(NinjamClientRef* client, MessageCallback callback)
 void NinjamClient_setLicenseCallback(NinjamClientRef* client, LicenseCallback callback) {
     if (client) {
         client->licenseCallback = callback;
+        // Wire bridge callback so the C++ licensecallback routes to Swift
+        NinjamClient_setBridgeLicenseCallback(callback);
     }
 }
 
@@ -687,19 +699,6 @@ void NinjamClient_syncWithServerClock(NinjamClientRef* client) {
     auto adapter = getAdapter(client);
     if (!adapter) return;
     
-    // Get current interval position
-    double currentPos = adapter->getIntervalPosition();
-    
-    // Request server time information
-    int bpm = adapter->getBPM();
-    int bpi = adapter->getBPI();
-    
-    // Calculate beat duration in milliseconds
-    double beatDuration = 60000.0 / bpm;
-    
-    // Calculate interval duration in milliseconds
-    double intervalDuration = beatDuration * bpi;
-    
     // The sync algorithm adjusts the local interval position
     // based on server timestamp and network latency estimation
     adapter->syncWithServerClock();
@@ -714,4 +713,40 @@ void NinjamClient_syncWithServerClock(NinjamClientRef* client) {
     }
 }
 
+// MARK: - Raw Data Channel API
 
+void NinjamClient_setRawDataCallback(NinjamClientRef* client, RawDataRecvCallback callback) {
+    if (client) {
+        client->rawDataCallback = callback;
+        auto adapter = getAdapter(client);
+        if (adapter) {
+            adapter->setOnRawData([client](int eventType, const unsigned char *guid,
+                                           unsigned int fourcc, const char *username,
+                                           int chidx, const void *data, int dataLen) {
+                if (client->rawDataCallback) {
+                    client->rawDataCallback(static_cast<int32_t>(eventType),
+                                            guid,
+                                            static_cast<uint32_t>(fourcc),
+                                            username,
+                                            static_cast<int32_t>(chidx),
+                                            data,
+                                            static_cast<int32_t>(dataLen));
+                }
+            });
+        }
+    }
+}
+
+void NinjamClient_rawDataSendBegin(NinjamClientRef* client, uint8_t outGuid[16], uint32_t fourcc, int32_t chidx, int32_t estsize) {
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        adapter->rawDataSendBegin(outGuid, static_cast<unsigned int>(fourcc), static_cast<int>(chidx), static_cast<int>(estsize));
+    }
+}
+
+void NinjamClient_rawDataSendWrite(NinjamClientRef* client, const uint8_t guid[16], const void* data, int32_t dataLen, int32_t isEnd) {
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        adapter->rawDataSendWrite(guid, data, static_cast<int>(dataLen), isEnd != 0);
+    }
+}

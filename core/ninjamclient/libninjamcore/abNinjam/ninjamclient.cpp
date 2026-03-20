@@ -4,6 +4,7 @@
 #include "./include/stringutil.h"
 #include "./include/remotechannel.h"
 #include <sstream>
+#include <condition_variable>
 
 using namespace AbNinjam::Common;
 using namespace std;
@@ -12,17 +13,75 @@ static int agree = 1;
 static bool autoAgree = false;
 static int bpm = 110;
 
+// Bridge license callback — set by NinjamClientBridge to route to Swift
+static int32_t (*g_bridgeLicenseCallback)(const char* text) = nullptr;
+
+// License agreement synchronization (blocks C++ network thread while UI shows dialog)
+static std::mutex g_license_mutex;
+static std::condition_variable g_license_cv;
+static bool g_license_pending = false;
+static int g_license_result = 0;
+
+extern "C" void NinjamClient_setBridgeLicenseCallback(int32_t (*cb)(const char*)) {
+  g_bridgeLicenseCallback = cb;
+}
+
 int licensecallback(void *userData, const char *licensetext) {
   L_(ltrace) << "Entering licensecallback";
-  if (autoAgree) {
-    return true;
+
+  if (!licensetext || !*licensetext) return 1; // No license text = accept
+
+  // Prepare for blocking
+  {
+    std::lock_guard<std::mutex> lock(g_license_mutex);
+    g_license_pending = true;
+    g_license_result = 0;
   }
-  LicenseDialog *licenseDialog = new LicenseDialog();
-  agree = licenseDialog->showDialog(licensetext);
-  if (agree == 0) {
-    return true;
+
+  // Notify UI to show dialog (fire-and-forget)
+  if (g_bridgeLicenseCallback) {
+    g_bridgeLicenseCallback(licensetext);
   }
-  return false;
+
+  // Block this thread waiting for user response (120s timeout)
+  {
+    std::unique_lock<std::mutex> lock(g_license_mutex);
+    bool responded = g_license_cv.wait_for(lock, std::chrono::seconds(120), [] {
+      return !g_license_pending;
+    });
+    if (!responded) {
+      L_(lwarning) << "License dialog timed out — rejecting";
+      agree = 256;
+      return 0;
+    }
+  }
+
+  L_(ldebug) << "License response: " << (g_license_result ? "accepted" : "rejected");
+  if (!g_license_result) {
+    agree = 256;
+  }
+  return g_license_result;
+}
+
+// Called from Swift when user accepts/rejects the license
+extern "C" void NinjamClient_respondToLicense(int accepted) {
+  {
+    std::lock_guard<std::mutex> lock(g_license_mutex);
+    g_license_result = accepted ? 1 : 0;
+    g_license_pending = false;
+  }
+  g_license_cv.notify_one();
+}
+
+// Cancel any pending license prompt (called during disconnect/cleanup)
+extern "C" void NinjamClient_cancelPendingLicense() {
+  {
+    std::lock_guard<std::mutex> lock(g_license_mutex);
+    if (!g_license_pending) return;
+    g_license_result = 0;
+    g_license_pending = false;
+  }
+  g_license_cv.notify_one();
 }
 
 void chatmsg_cb(void *userData, NJClient *inst, const char **parms,
@@ -56,20 +115,18 @@ NinjamClient::~NinjamClient() {
 
 void keepConnectionThread(NinjamClient *ninjamClient) {
   L_(ltrace) << "Entering keepConnectionThread";
-  // TODO: use scoped_lock for all environments when becomes available
-  //std::lock_guard<std::mutex> lock(ninjamClient->gsMtx());
-#ifdef unix
-  scoped_lock<mutex> lock(ninjamClient->gsMtx());
-#elif defined(_WIN32)
-  lock_guard<mutex> lock(ninjamClient->gsMtx());
-#endif
 
   ninjamClient->gsStopConnectionThread() = false;
   NJClient *g_client = ninjamClient->gsNjClient();
   bool connected = false;
-while (g_client->GetStatus() >= 0 &&
+  while (g_client->GetStatus() >= 0 &&
          ninjamClient->gsStopConnectionThread() == false) {
-    if (g_client->Run()) {
+    bool didWork;
+    {
+      std::lock_guard<std::mutex> lock(ninjamClient->gsMtx());
+      didWork = g_client->Run();
+    }
+    if (didWork) {
       // Sleep to prevent 100% CPU usage
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
 #ifdef unix
@@ -184,6 +241,7 @@ NinjamClient::connect(ConnectionProperties *connectionProperties) {
 
 void NinjamClient::disconnect() {
   L_(ltrace) << "[NinjamClient] Entering NinjamClient::disconnect";
+  NinjamClient_cancelPendingLicense(); // Unblock license dialog if waiting
   stopConnectionThread = true;
   if (connectionThread) {
     if (connectionThread->joinable()) {
@@ -380,5 +438,24 @@ void NinjamClient::sendChatMessage(std::string message) {
   L_(ltrace) << "[NinjamClient] Entering NinjamClient::sendChatMessage";
   if (njClient) {
     njClient->ChatMessage_Send("MSG", message.c_str());
+  }
+}
+
+void NinjamClient::setRawDataCallback(NJClient::RawDataCallback cb, void *userData) {
+  if (njClient) {
+    njClient->RawData_Callback = cb;
+    njClient->RawData_User = userData;
+  }
+}
+
+void NinjamClient::rawDataSendBegin(unsigned char outGuid[16], unsigned int fourcc, int chidx, int estsize) {
+  if (njClient) {
+    njClient->RawDataSendBegin(outGuid, fourcc, chidx, estsize);
+  }
+}
+
+void NinjamClient::rawDataSendWrite(const unsigned char guid[16], const void *data, int dataLen, bool isEnd) {
+  if (njClient) {
+    njClient->RawDataSendWrite(guid, data, dataLen, isEnd);
   }
 }

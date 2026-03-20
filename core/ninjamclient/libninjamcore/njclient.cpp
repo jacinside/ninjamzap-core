@@ -614,6 +614,8 @@ NJClient::NJClient()
   ChatMessage_User=0;
   ChannelMixer=0;
   ChannelMixer_User=0;
+  RawData_Callback=0;
+  RawData_User=0;
 
   waveWrite=0;
 #ifndef NJCLIENT_NO_XMIT_SUPPORT
@@ -739,6 +741,10 @@ NJClient::~NJClient()
   m_downloads.Empty();
   for (x = 0; x < m_locchannels.GetSize(); x ++) delete m_locchannels.Get(x);
   m_locchannels.Empty();
+  for (x = 0; x < m_rawdata_sendq.GetSize(); x ++) delete m_rawdata_sendq.Get(x);
+  m_rawdata_sendq.Empty();
+  for (x = 0; x < m_rawdata_downloads.GetSize(); x ++) delete m_rawdata_downloads.Get(x);
+  m_rawdata_downloads.Empty();
 
   delete m_wavebq;
 }
@@ -1241,8 +1247,20 @@ int NJClient::Run() // nonzero if sleep ok
                   }
                   //else OutputDebugString("woulda added silence to channel\n");
                 }
-                else if (dib.fourcc) // download coming
-                {                
+                else if (dib.fourcc && dib.fourcc != NJ_ENCODER_FMT_TYPE && RawData_Callback) // raw data channel
+                {
+                  if (config_debug_level>1) printf("RECV RAW BEGIN %s fourcc=%08x\n",guidtostr_tmp(dib.guid),dib.fourcc);
+                  RawDataDownloadTracker *tracker = new RawDataDownloadTracker;
+                  memcpy(tracker->guid, dib.guid, 16);
+                  tracker->fourcc = dib.fourcc;
+                  lstrcpyn_safe(tracker->username, dib.username, sizeof(tracker->username));
+                  tracker->chidx = dib.chidx;
+                  m_rawdata_downloads.Add(tracker);
+
+                  RawData_Callback(RawData_User, 0, dib.guid, dib.fourcc, dib.username, dib.chidx, NULL, 0);
+                }
+                else if (dib.fourcc) // download coming (audio/OGGv)
+                {
                   if (config_debug_level>1) printf("RECV BLOCK %s\n",guidtostr_tmp(dib.guid));
                   RemoteDownload *ds=new RemoteDownload;
                   memcpy(ds->guid,dib.guid,sizeof(ds->guid));
@@ -1273,8 +1291,38 @@ int NJClient::Run() // nonzero if sleep ok
         case MESSAGE_SERVER_DOWNLOAD_INTERVAL_WRITE:
           {
             mpb_server_download_interval_write diw;
-            if (!diw.parse(msg)) 
+            if (!diw.parse(msg))
             {
+              // Check raw data downloads first
+              bool handledAsRaw = false;
+              if (RawData_Callback)
+              {
+                for (int ri = 0; ri < m_rawdata_downloads.GetSize(); ri++)
+                {
+                  RawDataDownloadTracker *tracker = m_rawdata_downloads.Get(ri);
+                  if (tracker && !memcmp(tracker->guid, diw.guid, 16))
+                  {
+                    if (diw.audio_data_len > 0 && diw.audio_data)
+                    {
+                      RawData_Callback(RawData_User, 1, tracker->guid, tracker->fourcc,
+                                       tracker->username, tracker->chidx,
+                                       diw.audio_data, diw.audio_data_len);
+                    }
+                    if (diw.flags & 1) // end
+                    {
+                      RawData_Callback(RawData_User, 2, tracker->guid, tracker->fourcc,
+                                       tracker->username, tracker->chidx, NULL, 0);
+                      delete tracker;
+                      m_rawdata_downloads.Delete(ri);
+                    }
+                    handledAsRaw = true;
+                    break;
+                  }
+                }
+              }
+
+              if (!handledAsRaw)
+              {
               time_t now;
               time(&now);
               int x;
@@ -1308,6 +1356,7 @@ int NJClient::Run() // nonzero if sleep ok
                   }
                 }
               }
+              } // if (!handledAsRaw)
             }
           }
         break;
@@ -1655,8 +1704,104 @@ int NJClient::Run() // nonzero if sleep ok
   }
 #endif
 
+  // Drain raw data send queue
+  if (m_netcon)
+  {
+    m_rawdata_sendq_cs.Enter();
+    while (m_rawdata_sendq.GetSize())
+    {
+      RawDataQueueItem *item = m_rawdata_sendq.Get(0);
+      m_rawdata_sendq.Delete(0);
+      m_rawdata_sendq_cs.Leave();
+
+      if (item->type == 0) // begin
+      {
+        mpb_client_upload_interval_begin cuib;
+        memcpy(cuib.guid, item->guid, 16);
+        cuib.fourcc = item->fourcc;
+        cuib.chidx = item->chidx;
+        cuib.estsize = item->estsize;
+        m_netcon->Send(cuib.build());
+      }
+      else // data/end
+      {
+        int remaining = item->data.GetSize();
+        const unsigned char *ptr = (const unsigned char *)item->data.Get();
+        if (remaining == 0)
+        {
+          // End marker with no data
+          mpb_client_upload_interval_write wh;
+          memcpy(wh.guid, item->guid, 16);
+          wh.flags = item->flags;
+          wh.audio_data = NULL;
+          wh.audio_data_len = 0;
+          m_netcon->Send(wh.build());
+        }
+        else
+        {
+          while (remaining > 0)
+          {
+            int chunk = remaining;
+            if (chunk > MAX_ENC_BLOCKSIZE) chunk = MAX_ENC_BLOCKSIZE;
+
+            mpb_client_upload_interval_write wh;
+            memcpy(wh.guid, item->guid, 16);
+            wh.audio_data = ptr;
+            wh.audio_data_len = chunk;
+            remaining -= chunk;
+            ptr += chunk;
+            wh.flags = (remaining <= 0 && (item->flags & 1)) ? 1 : 0;
+            m_netcon->Send(wh.build());
+          }
+        }
+      }
+
+      delete item;
+      m_rawdata_sendq_cs.Enter();
+    }
+    m_rawdata_sendq_cs.Leave();
+  }
+
   return wantsleep;
 
+}
+
+
+void NJClient::RawDataSendBegin(unsigned char outGuid[16], unsigned int fourcc, int chidx, int estsize)
+{
+  WDL_RNG_bytes(outGuid, 16);
+
+  RawDataQueueItem *item = new RawDataQueueItem;
+  item->type = 0; // begin
+  memcpy(item->guid, outGuid, 16);
+  item->fourcc = fourcc;
+  item->chidx = chidx;
+  item->estsize = estsize;
+  item->flags = 0;
+
+  m_rawdata_sendq_cs.Enter();
+  m_rawdata_sendq.Add(item);
+  m_rawdata_sendq_cs.Leave();
+}
+
+void NJClient::RawDataSendWrite(const unsigned char guid[16], const void *data, int dataLen, bool isEnd)
+{
+  RawDataQueueItem *item = new RawDataQueueItem;
+  item->type = 1; // data/end
+  memcpy(item->guid, guid, 16);
+  item->fourcc = 0;
+  item->chidx = 0;
+  item->estsize = 0;
+  item->flags = isEnd ? 1 : 0;
+  if (data && dataLen > 0)
+  {
+    item->data.Resize(dataLen);
+    memcpy(item->data.Get(), data, dataLen);
+  }
+
+  m_rawdata_sendq_cs.Enter();
+  m_rawdata_sendq.Add(item);
+  m_rawdata_sendq_cs.Leave();
 }
 
 
@@ -1817,7 +1962,7 @@ void NJClient::process_samples(float **inbuf, int innch, float **outbuf, int out
       else
         lc->m_curwritefile_curbuflen=0.0;
 
-      if (lc->bcast_active)
+      if (lc->bcast_active) 
       {
         lc->m_bq.AddBlock(sc_nch,0.0,src,len,src2);
         lc->m_curwritefile_curbuflen += len;
@@ -2676,6 +2821,18 @@ float NJClient::GetUserChannelPeak(int useridx, int channelidx, int whichch)
 
 }
 
+int NJClient::GetUserChannelDecodedNch(int useridx, int channelidx)
+{
+  WDL_MutexLock lock(&m_remotechannel_rd_mutex);
+
+  if (useridx<0 || useridx>=m_remoteusers.GetSize()||channelidx<0||channelidx>=MAX_USER_CHANNELS) return 0;
+  RemoteUser *user=m_remoteusers.Get(useridx);
+  if (!(user->chanpresentmask & (1<<channelidx))) return 0;
+  RemoteUser_Channel *p=user->channels + channelidx;
+  if (p->ds && p->ds->decode_codec) return p->ds->decode_codec->GetNumChannels();
+  return 0;
+}
+
 float NJClient::GetLocalChannelPeak(int ch, int whichch)
 {
   int x;
@@ -3147,8 +3304,8 @@ void RemoteDownload::Write(const void *buf, int len)
 }
 
 
-Local_Channel::Local_Channel() : channel_idx(0), src_channel(0), volume(1.0f), pan(0.0f),
-                muted(false), solo(false), broadcasting(false),
+Local_Channel::Local_Channel() : channel_idx(0), src_channel(0), volume(1.0f), pan(0.0f), 
+                muted(false), solo(false), broadcasting(false), 
 #ifndef NJCLIENT_NO_XMIT_SUPPORT
                 m_enc(NULL), 
                 m_enc_bitrate_used(0), 

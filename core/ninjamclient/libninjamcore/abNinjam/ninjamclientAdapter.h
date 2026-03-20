@@ -57,6 +57,9 @@ using OnConnectCallback = std::function<void()>;
 using OnDisconnectCallback = std::function<void(int reason)>;
 using OnChatMessageCallback = std::function<void(const char* username, const char* message)>;
 using OnIntervalCallback = std::function<void(int bpm, int bpi)>;
+using OnRawDataCallback = std::function<void(int eventType, const unsigned char *guid,
+                                              unsigned int fourcc, const char *username,
+                                              int chidx, const void *data, int dataLen)>;
 
 class NinjamClientAdapter {
 public:
@@ -81,6 +84,11 @@ public:
     void setOnDisconnect(OnDisconnectCallback callback);
     void setOnChatMessage(OnChatMessageCallback callback);
     void setOnInterval(OnIntervalCallback callback);
+    void setOnRawData(OnRawDataCallback callback);
+
+    // Raw data send
+    void rawDataSendBegin(unsigned char outGuid[16], unsigned int fourcc, int chidx, int estsize);
+    void rawDataSendWrite(const unsigned char guid[16], const void *data, int dataLen, bool isEnd);
   
     // Channel management
     void removeLocalChannel(int channelIndex);
@@ -117,6 +125,7 @@ public:
     // Server information
     std::string getServerStatus();
     std::string getErrorString();
+    const char* getLocalUserName();
   
     // Metronome playback
     void playMetronomeTick(bool isDownbeat);
@@ -139,6 +148,7 @@ public:
   OnDisconnectCallback onDisconnectCallback;
   OnChatMessageCallback onChatMessageCallback;
   OnIntervalCallback onIntervalCallback;
+  OnRawDataCallback onRawDataCallback;
 
 
 private:

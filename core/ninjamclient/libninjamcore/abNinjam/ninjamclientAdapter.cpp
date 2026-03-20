@@ -11,6 +11,18 @@
 //#endif
 
 
+// Static C callback that routes raw data events to the adapter's std::function
+static void rawDataCCallback(void *userData, int eventType,
+                              const unsigned char *guid, unsigned int fourcc,
+                              const char *username, int chidx,
+                              const void *data, int dataLen)
+{
+    NinjamClientAdapter *adapter = static_cast<NinjamClientAdapter *>(userData);
+    if (adapter && adapter->onRawDataCallback) {
+        adapter->onRawDataCallback(eventType, guid, fourcc, username, chidx, data, dataLen);
+    }
+}
+
 NinjamClientAdapter::NinjamClientAdapter()
     : client(new AbNinjam::Common::NinjamClient())
     //, nextChannelIndex(0)
@@ -26,6 +38,7 @@ NinjamClientAdapter::NinjamClientAdapter()
     , masterPan(0.0f)
     , masterMute(false)
     , onIntervalCallback(nullptr)
+    , onRawDataCallback(nullptr)
     , lastIntervalPosition(0.0) {
     
     setupInitialState();
@@ -55,15 +68,45 @@ NinjamClientAdapter::~NinjamClientAdapter() {
 }
 
 static void njClientChatCallback(void* obj, NJClient* client, const char** parms, int nparms) {
-  // This static function will get called by NJClient
-  // obj is a pointer to our NinjamClientAdapter instance
   NinjamClientAdapter* adapter = static_cast<NinjamClientAdapter*>(obj);
-  
-  if (nparms >= 2 && adapter && adapter->onChatMessageCallback) {
-    // parms[0] typically contains the username
-    // parms[1] typically contains the message
-      adapter->onChatMessageCallback(parms[1], parms[2]);
+
+  if (nparms < 1 || !adapter || !adapter->onChatMessageCallback || !parms[0]) return;
+
+  const char* type = parms[0];
+
+  if (!strcmp(type, "MSG")) {
+    // Regular/server message: parms[1] = sender (empty = server), parms[2] = text
+    const char* user = parms[1] ? parms[1] : "";
+    const char* text = parms[2] ? parms[2] : "";
+    adapter->onChatMessageCallback(user, text);
   }
+  else if (!strcmp(type, "PRIVMSG")) {
+    // Private message: parms[1] = sender, parms[2] = text
+    const char* user = parms[1] ? parms[1] : "";
+    const char* text = parms[2] ? parms[2] : "";
+    adapter->onChatMessageCallback(user, text);
+  }
+  else if (!strcmp(type, "JOIN")) {
+    // User joined: parms[1] = username
+    const char* user = parms[1] ? parms[1] : "unknown";
+    std::string joinMsg = std::string(user) + " has joined the server";
+    adapter->onChatMessageCallback("", joinMsg.c_str());
+  }
+  else if (!strcmp(type, "PART")) {
+    // User left: parms[1] = username
+    const char* user = parms[1] ? parms[1] : "unknown";
+    std::string partMsg = std::string(user) + " has left the server";
+    adapter->onChatMessageCallback("", partMsg.c_str());
+  }
+  else if (!strcmp(type, "TOPIC")) {
+    // Topic: parms[1] = who set it, parms[2] = topic text
+    const char* text = parms[2] ? parms[2] : "";
+    if (text[0]) {
+      std::string topicMsg = std::string("Topic is: ") + text;
+      adapter->onChatMessageCallback("", topicMsg.c_str());
+    }
+  }
+  // Ignore USERCOUNT, SESSION, and other internal types
 }
 
 void NinjamClientAdapter::setupInitialState() {
@@ -114,6 +157,17 @@ void NinjamClientAdapter::connect(const std::string& host, int port) {
 
     if (status == AbNinjam::Common::NinjamClientStatus::ok) {
         connected = true;
+
+        // Report BPM/BPI immediately after connection — don't wait for the
+        // 1-second polling interval, which causes a stale-defaults window.
+        int bpm = getBPM();
+        int bpi = getBPI();
+        if (onIntervalCallback && (bpm != lastReportedBPM || bpi != lastReportedBPI)) {
+            onIntervalCallback(bpm, bpi);
+            lastReportedBPM = bpm;
+            lastReportedBPI = bpi;
+        }
+
         if (onConnectCallback) {
             onConnectCallback();
         }
@@ -587,6 +641,13 @@ std::string NinjamClientAdapter::getErrorString() {
     return "";
 }
 
+const char* NinjamClientAdapter::getLocalUserName() {
+    if (connected && client) {
+        return client->gsNjClient()->GetUser();
+    }
+    return "";
+}
+
 // Implementation of syncWithServerClock
 void NinjamClientAdapter::syncWithServerClock() {
     if (!connected || !client) return;
@@ -693,4 +754,21 @@ void NinjamClientAdapter::subscribeToAllRemoteChannels() {
     
     // Invalidate cache to ensure our changes are reflected
     invalidateUsersCache();
+}
+
+void NinjamClientAdapter::setOnRawData(OnRawDataCallback callback) {
+    onRawDataCallback = callback;
+    if (client) {
+        client->setRawDataCallback(rawDataCCallback, this);
+    }
+}
+
+void NinjamClientAdapter::rawDataSendBegin(unsigned char outGuid[16], unsigned int fourcc, int chidx, int estsize) {
+    if (!connected || !client) return;
+    client->rawDataSendBegin(outGuid, fourcc, chidx, estsize);
+}
+
+void NinjamClientAdapter::rawDataSendWrite(const unsigned char guid[16], const void *data, int dataLen, bool isEnd) {
+    if (!connected || !client) return;
+    client->rawDataSendWrite(guid, data, dataLen, isEnd);
 }

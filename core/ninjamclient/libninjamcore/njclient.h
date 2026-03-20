@@ -146,6 +146,7 @@ public:
   void SetUserState(int idx, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute);
 
   float GetUserChannelPeak(int useridx, int channelidx, int whichch=-1);
+  int GetUserChannelDecodedNch(int useridx, int channelidx); // returns decoded Vorbis channel count (1=mono, 2=stereo, 0=not yet decoded)
   double GetUserSessionPos(int useridx, time_t *lastupdatetime, double *maxlen);
   char *GetUserChannelState(int useridx, int channelidx, bool *sub=0, float *vol=0, float *pan=0, bool *mute=0, bool *solo=0, int *outchannel=0, int *flags=0);
   void SetUserChannelState(int useridx, int channelidx, bool setsub, bool sub, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute, bool setsolo, bool solo, bool setoutch=false, int outchannel=0);
@@ -199,6 +200,19 @@ public:
   // return 0 if you want the default behavior
   int (*ChannelMixer)(void *userData, float **inbuf, int in_offset, int innch, int chidx, float *outbuf, int len);
   void *ChannelMixer_User;
+
+  // Raw data channel support (for non-audio payloads like video)
+  // eventType: 0=begin, 1=data, 2=end
+  typedef void (*RawDataCallback)(void *userData, int eventType,
+                                   const unsigned char *guid, unsigned int fourcc,
+                                   const char *username, int chidx,
+                                   const void *data, int dataLen);
+  RawDataCallback RawData_Callback;
+  void *RawData_User;
+
+  // Send raw data: call Begin to start a new interval, then Write chunks, final Write with isEnd=true
+  void RawDataSendBegin(unsigned char outGuid[16], unsigned int fourcc, int chidx, int estsize);
+  void RawDataSendWrite(const unsigned char guid[16], const void *data, int dataLen, bool isEnd);
 
   WDL_Mutex m_remotechannel_rd_mutex;
 
@@ -269,6 +283,28 @@ protected:
   Net_Connection *m_netcon;
   WDL_PtrList<RemoteUser> m_remoteusers;
   WDL_PtrList<RemoteDownload> m_downloads;
+
+  // Raw data send queue (thread-safe: any thread pushes, Run() drains under gsMtx)
+  struct RawDataQueueItem {
+    int type; // 0=begin, 1=data/end
+    unsigned char guid[16];
+    unsigned int fourcc;
+    int chidx;
+    int estsize;
+    int flags; // &1 = end
+    WDL_HeapBuf data;
+  };
+  WDL_PtrList<RawDataQueueItem> m_rawdata_sendq;
+  WDL_Mutex m_rawdata_sendq_cs;
+
+  // Raw data receive tracking
+  struct RawDataDownloadTracker {
+    unsigned char guid[16];
+    unsigned int fourcc;
+    char username[256];
+    int chidx;
+  };
+  WDL_PtrList<RawDataDownloadTracker> m_rawdata_downloads;
 
   WDL_HeapBuf tmpblock;
 };

@@ -23,6 +23,11 @@
 
 #define ADJUST_VOLUME 10
 
+// Bridge license callback — set by NinjamClientBridge to route license prompts to Swift
+extern "C" void NinjamClient_setBridgeLicenseCallback(int32_t (*cb)(const char*));
+extern "C" void NinjamClient_respondToLicense(int accepted);
+extern "C" void NinjamClient_cancelPendingLicense();
+
 namespace AbNinjam {
 namespace Common {
 
@@ -49,6 +54,11 @@ public:
   void setUserChannelState(int userId, int channelId,bool setsub, bool sub, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute, bool setsolo, bool solo, bool setoutch, int outchannel);
   void setLocalChannelVolume(int channelId, float volume);
   void sendChatMessage(std::string message);
+
+  // Raw data channel passthrough
+  void setRawDataCallback(NJClient::RawDataCallback cb, void *userData);
+  void rawDataSendBegin(unsigned char outGuid[16], unsigned int fourcc, int chidx, int estsize);
+  void rawDataSendWrite(const unsigned char guid[16], const void *data, int dataLen, bool isEnd);
 
 private:
   std::thread *connectionThread;
