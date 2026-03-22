@@ -616,6 +616,14 @@ NJClient::NJClient()
   ChannelMixer_User=0;
   RawData_Callback=0;
   RawData_User=0;
+  IntervalSwap_Callback=0;
+  IntervalSwap_User=0;
+
+  m_video_active=false;
+  m_video_fourcc=0;
+  m_video_chidx=0;
+  memset(m_video_guid,0,16);
+  m_video_interval_open=false;
 
   waveWrite=0;
 #ifndef NJCLIENT_NO_XMIT_SUPPORT
@@ -1456,6 +1464,8 @@ int NJClient::Run() // nonzero if sleep ok
   for (u = 0; u < m_locchannels.GetSize(); u ++)
   {
     Local_Channel *lc=m_locchannels.Get(u);
+    // Skip video-only channels — they use raw data transport, not the audio pipeline
+    if (lc->flags & 0x10) continue;
     WDL_HeapBuf *p=0;
     int block_nch=1;
 
@@ -1804,11 +1814,50 @@ void NJClient::RawDataSendWrite(const unsigned char guid[16], const void *data, 
   m_rawdata_sendq_cs.Leave();
 }
 
+void NJClient::SetVideoChannel(int chidx, unsigned int fourcc)
+{
+  m_video_chidx = chidx;
+  m_video_fourcc = fourcc;
+  m_video_active = true;
+}
+
+void NJClient::StopVideoChannel()
+{
+  if (m_video_interval_open)
+  {
+    RawDataSendWrite(m_video_guid, NULL, 0, true); // END current interval
+    m_video_interval_open = false;
+  }
+  m_video_active = false;
+}
+
+void NJClient::QueueVideoFrame(const void *data, int len)
+{
+  if (!m_video_active || !m_video_interval_open) return;
+  if (data && len > 0)
+    RawDataSendWrite(m_video_guid, data, len, false);
+}
+
+void NJClient::SetVideoSPSPPS(const void *data, int len)
+{
+  m_video_spspps_cs.Enter();
+  if (data && len > 0)
+  {
+    m_video_spspps.Resize(len);
+    memcpy(m_video_spspps.Get(), data, len);
+  }
+  else
+  {
+    m_video_spspps.Resize(0);
+  }
+  m_video_spspps_cs.Leave();
+}
+
 
 DecodeState *NJClient::start_decode(unsigned char *guid, int chanflags, unsigned int fourcc, DecodeMediaBuffer *decbuf)
 {
-  DecodeState *newstate=new DecodeState;  
-  if (decbuf) 
+  DecodeState *newstate=new DecodeState;
+  if (decbuf)
   {
     decbuf->AddRef();
     newstate->decode_buf=decbuf;
@@ -2039,7 +2088,6 @@ void NJClient::process_samples(float **inbuf, int innch, float **outbuf, int out
   }
 
   m_locchan_cs.Leave();
-
 
   if (!justmonitor)
   {
@@ -2586,10 +2634,11 @@ void NJClient::on_new_interval()
   {
     Local_Channel *lc=m_locchannels.Get(u);
     if (lc->channel_idx >= m_max_localch) continue;
+    if (lc->flags & 0x10) continue; // Skip video-only channels
 
     if (!(lc->flags&(4|2)))  // session mode and voice chat modes use their own (fixed) intervals
     {
-      if (lc->bcast_active) 
+      if (lc->bcast_active)
       {
         lc->m_bq.AddBlock(0,0.0,NULL,0);
       }
@@ -2642,6 +2691,24 @@ void NJClient::on_new_interval()
     }
   }
   m_users_cs.Leave();
+
+  // Video channel: end previous interval and begin new one (same thread as audio)
+  if (m_video_active) {
+    if (m_video_interval_open)
+      RawDataSendWrite(m_video_guid, NULL, 0, true); // END previous
+    RawDataSendBegin(m_video_guid, m_video_fourcc, m_video_chidx, 0); // BEGIN new
+    m_video_interval_open = true;
+    // Send cached SPS/PPS as first chunk so receiver can init decoder
+    m_video_spspps_cs.Enter();
+    if (m_video_spspps.GetSize() > 0)
+      RawDataSendWrite(m_video_guid, m_video_spspps.Get(), m_video_spspps.GetSize(), false);
+    m_video_spspps_cs.Leave();
+  }
+
+  // Notify that audio interval just swapped — video playback should start now
+  if (IntervalSwap_Callback) {
+    IntervalSwap_Callback(IntervalSwap_User);
+  }
 }  //if (m_enc->isError()) printf("ERROR\n");
   //else printf("YAY\n");
 

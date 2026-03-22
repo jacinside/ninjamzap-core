@@ -373,6 +373,7 @@ std::vector<AbNinjam::Common::RemoteUser> NinjamClient::getRemoteUsers() {
         channel->name = result;
         channel->isStereo = isStereo;
         channel->channelPairIndex = -1;
+        channel->flags = flags;
         user->channels.push_back(*channel);
         L_(ltrace) << "[NinjamClient] channel->id: " << channel->id;
         L_(ltrace) << "[NinjamClient] channel->volume: " << channel->volume;

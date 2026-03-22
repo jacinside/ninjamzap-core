@@ -214,6 +214,17 @@ public:
   void RawDataSendBegin(unsigned char outGuid[16], unsigned int fourcc, int chidx, int estsize);
   void RawDataSendWrite(const unsigned char guid[16], const void *data, int dataLen, bool isEnd);
 
+  // Called when audio interval swaps (audio starts playing new interval)
+  typedef void (*IntervalSwapCallback)(void *userData);
+  IntervalSwapCallback IntervalSwap_Callback;
+  void *IntervalSwap_User;
+
+  // Video channel management — interval BEGIN/END driven from on_new_interval()
+  void SetVideoChannel(int chidx, unsigned int fourcc);
+  void StopVideoChannel();
+  void QueueVideoFrame(const void *data, int len);
+  void SetVideoSPSPPS(const void *data, int len);
+
   WDL_Mutex m_remotechannel_rd_mutex;
 
   bool is_likely_lobby() const {
@@ -307,6 +318,15 @@ protected:
   WDL_PtrList<RawDataDownloadTracker> m_rawdata_downloads;
 
   WDL_HeapBuf tmpblock;
+
+  // Video channel state — interval BEGIN/END managed by on_new_interval()
+  bool m_video_active;
+  unsigned int m_video_fourcc;
+  int m_video_chidx;
+  unsigned char m_video_guid[16];
+  bool m_video_interval_open;
+  WDL_HeapBuf m_video_spspps;
+  WDL_Mutex m_video_spspps_cs;
 };
 
 

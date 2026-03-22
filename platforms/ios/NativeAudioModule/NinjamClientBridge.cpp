@@ -750,3 +750,43 @@ void NinjamClient_rawDataSendWrite(NinjamClientRef* client, const uint8_t guid[1
         adapter->rawDataSendWrite(guid, data, static_cast<int>(dataLen), isEnd != 0);
     }
 }
+
+static IntervalSwapCallback g_intervalSwapCallback = nullptr;
+
+void NinjamClient_setIntervalSwapCallback(NinjamClientRef* client, IntervalSwapCallback callback) {
+    g_intervalSwapCallback = callback;
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        adapter->setIntervalSwapCallback([]() {
+            if (g_intervalSwapCallback) g_intervalSwapCallback();
+        });
+    }
+}
+
+void NinjamClient_setVideoChannel(NinjamClientRef* client, int32_t chidx, uint32_t fourcc) {
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        adapter->setVideoChannel(static_cast<int>(chidx), static_cast<unsigned int>(fourcc));
+    }
+}
+
+void NinjamClient_stopVideoChannel(NinjamClientRef* client) {
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        adapter->stopVideoChannel();
+    }
+}
+
+void NinjamClient_queueVideoFrame(NinjamClientRef* client, const void* data, int32_t len) {
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        adapter->queueVideoFrame(data, static_cast<int>(len));
+    }
+}
+
+void NinjamClient_setVideoSPSPPS(NinjamClientRef* client, const void* data, int32_t len) {
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        adapter->setVideoSPSPPS(data, static_cast<int>(len));
+    }
+}

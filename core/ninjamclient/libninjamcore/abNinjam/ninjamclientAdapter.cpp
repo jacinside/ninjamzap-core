@@ -772,3 +772,36 @@ void NinjamClientAdapter::rawDataSendWrite(const unsigned char guid[16], const v
     if (!connected || !client) return;
     client->rawDataSendWrite(guid, data, dataLen, isEnd);
 }
+
+void NinjamClientAdapter::setIntervalSwapCallback(std::function<void()> callback) {
+    intervalSwapCb = callback;
+    if (client && client->gsNjClient()) {
+        client->gsNjClient()->IntervalSwap_Callback = [](void *userData) {
+            NinjamClientAdapter *adapter = static_cast<NinjamClientAdapter*>(userData);
+            if (adapter && adapter->intervalSwapCb) {
+                adapter->intervalSwapCb();
+            }
+        };
+        client->gsNjClient()->IntervalSwap_User = this;
+    }
+}
+
+void NinjamClientAdapter::setVideoChannel(int chidx, unsigned int fourcc) {
+    if (!client) return;
+    client->gsNjClient()->SetVideoChannel(chidx, fourcc);
+}
+
+void NinjamClientAdapter::stopVideoChannel() {
+    if (!client) return;
+    client->gsNjClient()->StopVideoChannel();
+}
+
+void NinjamClientAdapter::queueVideoFrame(const void *data, int len) {
+    if (!client) return;
+    client->gsNjClient()->QueueVideoFrame(data, len);
+}
+
+void NinjamClientAdapter::setVideoSPSPPS(const void *data, int len) {
+    if (!client) return;
+    client->gsNjClient()->SetVideoSPSPPS(data, len);
+}

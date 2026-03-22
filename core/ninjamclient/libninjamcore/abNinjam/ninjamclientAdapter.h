@@ -85,10 +85,17 @@ public:
     void setOnChatMessage(OnChatMessageCallback callback);
     void setOnInterval(OnIntervalCallback callback);
     void setOnRawData(OnRawDataCallback callback);
+    void setIntervalSwapCallback(std::function<void()> callback);
 
     // Raw data send
     void rawDataSendBegin(unsigned char outGuid[16], unsigned int fourcc, int chidx, int estsize);
     void rawDataSendWrite(const unsigned char guid[16], const void *data, int dataLen, bool isEnd);
+
+    // Video channel management (delegates to NJClient)
+    void setVideoChannel(int chidx, unsigned int fourcc);
+    void stopVideoChannel();
+    void queueVideoFrame(const void *data, int len);
+    void setVideoSPSPPS(const void *data, int len);
   
     // Channel management
     void removeLocalChannel(int channelIndex);
@@ -149,6 +156,7 @@ public:
   OnChatMessageCallback onChatMessageCallback;
   OnIntervalCallback onIntervalCallback;
   OnRawDataCallback onRawDataCallback;
+  std::function<void()> intervalSwapCb;
 
 
 private:

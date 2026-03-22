@@ -135,6 +135,16 @@ void NinjamClient_setRawDataCallback(NinjamClientRef* client, RawDataRecvCallbac
 void NinjamClient_rawDataSendBegin(NinjamClientRef* client, uint8_t outGuid[16], uint32_t fourcc, int32_t chidx, int32_t estsize);
 void NinjamClient_rawDataSendWrite(NinjamClientRef* client, const uint8_t guid[16], const void* data, int32_t dataLen, int32_t isEnd);
 
+// Audio interval swap notification — fires when audio starts playing a new interval
+typedef void (*IntervalSwapCallback)(void);
+void NinjamClient_setIntervalSwapCallback(NinjamClientRef* client, IntervalSwapCallback callback);
+
+// Video channel management — interval BEGIN/END driven from C++ on_new_interval()
+void NinjamClient_setVideoChannel(NinjamClientRef* client, int32_t chidx, uint32_t fourcc);
+void NinjamClient_stopVideoChannel(NinjamClientRef* client);
+void NinjamClient_queueVideoFrame(NinjamClientRef* client, const void* data, int32_t len);
+void NinjamClient_setVideoSPSPPS(NinjamClientRef* client, const void* data, int32_t len);
+
 struct NinjamClientRef {
     void* adapter; // Changed from NJClientAdapter to NinjamClientAdapter
     MessageCallback messageCallback;
