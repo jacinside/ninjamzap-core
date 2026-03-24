@@ -1823,11 +1823,9 @@ void NJClient::SetVideoChannel(int chidx, unsigned int fourcc)
 
 void NJClient::StopVideoChannel()
 {
-  if (m_video_interval_open)
-  {
-    RawDataSendWrite(m_video_guid, NULL, 0, true); // END current interval
-    m_video_interval_open = false;
-  }
+  // Don't send END immediately — let on_new_interval() handle it at the
+  // interval boundary so video END stays synced with audio interval swap.
+  // Frames are dropped until then because m_video_active guard check fails.
   m_video_active = false;
 }
 
@@ -2703,6 +2701,11 @@ void NJClient::on_new_interval()
     if (m_video_spspps.GetSize() > 0)
       RawDataSendWrite(m_video_guid, m_video_spspps.Get(), m_video_spspps.GetSize(), false);
     m_video_spspps_cs.Leave();
+  } else if (m_video_interval_open) {
+    // Video was deactivated mid-interval — send END at interval boundary
+    // so it stays synced with the audio interval swap
+    RawDataSendWrite(m_video_guid, NULL, 0, true);
+    m_video_interval_open = false;
   }
 
   // Notify that audio interval just swapped — video playback should start now
