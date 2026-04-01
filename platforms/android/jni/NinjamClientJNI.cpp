@@ -1,5 +1,6 @@
 #include "NinjamClientJNI.h"
 #include "NinjamClientBridge.h"
+#include "OboeEngine.h"
 #include <android/log.h>
 #include <cstring>
 
@@ -464,3 +465,85 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetCallbackTarget(JN
 
     LOGI("JNI callback target set, method IDs cached");
 }
+
+// ============================================================================
+// Audio Engine (Oboe)
+// ============================================================================
+
+// Global engine instance (one per app, like iOS AudioSessionManager)
+static OboeEngine* g_engine = nullptr;
+
+extern "C" {
+
+JNIEXPORT jlong JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeCreateAudioEngine(JNIEnv* env, jobject thiz) {
+    if (g_engine) {
+        LOGI("Audio engine already exists, reusing");
+        return reinterpret_cast<jlong>(g_engine);
+    }
+    g_engine = new OboeEngine();
+    LOGI("Audio engine created: %p", g_engine);
+    return reinterpret_cast<jlong>(g_engine);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeDestroyAudioEngine(JNIEnv* env, jobject thiz, jlong enginePtr) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (engine) {
+        delete engine;
+        if (engine == g_engine) g_engine = nullptr;
+        LOGI("Audio engine destroyed");
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeAudioEngineSetClient(JNIEnv* env, jobject thiz, jlong enginePtr, jlong clientPtr) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    if (engine) engine->setClient(client);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeAudioEngineStart(JNIEnv* env, jobject thiz, jlong enginePtr, jint sampleRate, jint framesPerBuffer) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!engine) return JNI_FALSE;
+    return engine->start(sampleRate, framesPerBuffer) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeAudioEngineStop(JNIEnv* env, jobject thiz, jlong enginePtr) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (engine) engine->stop();
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeAudioEngineIsRunning(JNIEnv* env, jobject thiz, jlong enginePtr) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    return (engine && engine->isRunning()) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeAudioEngineGetSampleRate(JNIEnv* env, jobject thiz, jlong enginePtr) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    return engine ? engine->getSampleRate() : 0;
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeAudioEngineGetOutputPeaks(JNIEnv* env, jobject thiz, jlong enginePtr, jfloatArray peaks) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!engine) return;
+    jfloat* p = env->GetFloatArrayElements(peaks, nullptr);
+    engine->getOutputPeaks(&p[0], &p[1]);
+    env->ReleaseFloatArrayElements(peaks, p, 0);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeAudioEngineGetInputPeaks(JNIEnv* env, jobject thiz, jlong enginePtr, jfloatArray peaks) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!engine) return;
+    jfloat* p = env->GetFloatArrayElements(peaks, nullptr);
+    engine->getInputPeaks(&p[0], &p[1]);
+    env->ReleaseFloatArrayElements(peaks, p, 0);
+}
+
+} // extern "C"

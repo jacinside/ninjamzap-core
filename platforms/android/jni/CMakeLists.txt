@@ -58,6 +58,7 @@ set(NINJAM_SOURCES
     ${JNI_DIR}/NinjamClientJNI.cpp
     ${JNI_DIR}/AndroidLogger.cpp
     ${JNI_DIR}/OboeCallback.cpp
+    ${JNI_DIR}/OboeEngine.cpp
     ${JNI_DIR}/fileutil_android.cpp
 
     # --- C Bridge (shared with iOS) ---
