@@ -3,7 +3,11 @@
 #include <type_traits>
 #include <chrono>
 #ifdef __cplusplus
-#include "NJClient/abNinjam/ninjamclientAdapter.h" // Updated include path
+#ifdef __ANDROID__
+#include "ninjamclientAdapter.h"  // Android: found via include path
+#else
+#include "NJClient/abNinjam/ninjamclientAdapter.h"  // iOS: relative to NativeAudioModule/
+#endif
 #include <cstring>
 #include <string>
 #include <cstdlib>

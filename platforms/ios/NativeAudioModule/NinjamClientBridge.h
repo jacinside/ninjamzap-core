@@ -12,6 +12,8 @@
 // Define fallback types for non-Apple platforms
 typedef int32_t OSStatus;
 typedef struct AudioTimeStamp AudioTimeStamp;
+#define noErr 0
+#define kAudioUnitErr_FailedInitialization -10868
 #endif
 
 #ifdef __cplusplus

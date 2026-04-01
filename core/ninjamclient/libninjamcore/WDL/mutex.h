@@ -71,8 +71,10 @@ class WDL_Mutex {
       pthread_mutexattr_t attr;
       pthread_mutexattr_init(&attr);
       pthread_mutexattr_settype(&attr,PTHREAD_MUTEX_RECURSIVE);
-#ifdef __linux__
+#if defined(__linux__) && !defined(__ANDROID__)
       // todo: macos too?
+      pthread_mutexattr_setprotocol(&attr,PTHREAD_PRIO_INHERIT);
+#elif defined(__ANDROID__) && __ANDROID_API__ >= 28
       pthread_mutexattr_setprotocol(&attr,PTHREAD_PRIO_INHERIT);
 #endif
       pthread_mutex_init(&m_mutex,&attr);

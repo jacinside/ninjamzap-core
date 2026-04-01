@@ -1,31 +1,29 @@
 #include <android/log.h>
+#include <cstdarg>
 
 #define LOG_TAG "NinjamCore"
 
-// Replacement for IOSLogger.cpp on Android
-// Called from C++ core code for logging
+// Implementation of LoggerBridge.h interface (same as iOS LoggerBridge.mm)
+// These functions are called by IOSLogger.h/cpp via the C-linkage bridge.
 
 extern "C" {
 
-void ninjam_log_info(const char* format, ...) {
-    va_list args;
-    va_start(args, format);
-    __android_log_vprint(ANDROID_LOG_INFO, LOG_TAG, format, args);
-    va_end(args);
+void LogMessage(const char* message, int level) {
+    int androidLevel;
+    switch (level) {
+        case 0: androidLevel = ANDROID_LOG_ERROR; break;   // LogLevelError
+        case 1: androidLevel = ANDROID_LOG_WARN; break;    // LogLevelWarning
+        case 2: androidLevel = ANDROID_LOG_INFO; break;    // LogLevelInfo
+        case 3: androidLevel = ANDROID_LOG_DEBUG; break;   // LogLevelDebug
+        case 4: androidLevel = ANDROID_LOG_VERBOSE; break; // LogLevelTrace
+        default: androidLevel = ANDROID_LOG_INFO; break;
+    }
+    __android_log_print(androidLevel, LOG_TAG, "%s", message);
 }
 
-void ninjam_log_error(const char* format, ...) {
-    va_list args;
-    va_start(args, format);
-    __android_log_vprint(ANDROID_LOG_ERROR, LOG_TAG, format, args);
-    va_end(args);
-}
-
-void ninjam_log_debug(const char* format, ...) {
-    va_list args;
-    va_start(args, format);
-    __android_log_vprint(ANDROID_LOG_DEBUG, LOG_TAG, format, args);
-    va_end(args);
+void SetLogLevel(int level) {
+    // Android logging is always enabled; level filtering happens in IOSLogOutput
+    // Nothing to do here.
 }
 
 } // extern "C"

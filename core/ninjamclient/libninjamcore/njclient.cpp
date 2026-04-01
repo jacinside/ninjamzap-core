@@ -2676,6 +2676,18 @@ float NJClient::GetUserChannelPeak(int useridx, int channelidx, int whichch)
 
 }
 
+int NJClient::GetUserChannelDecodedNch(int useridx, int channelidx)
+{
+  WDL_MutexLock lock(&m_remotechannel_rd_mutex);
+
+  if (useridx<0 || useridx>=m_remoteusers.GetSize()||channelidx<0||channelidx>=MAX_USER_CHANNELS) return 0;
+  RemoteUser *user=m_remoteusers.Get(useridx);
+  if (!(user->chanpresentmask & (1<<channelidx))) return 0;
+  RemoteUser_Channel *p=user->channels + channelidx;
+  if (p->ds && p->ds->decode_codec) return p->ds->decode_codec->GetNumChannels();
+  return 0;
+}
+
 float NJClient::GetLocalChannelPeak(int ch, int whichch)
 {
   int x;

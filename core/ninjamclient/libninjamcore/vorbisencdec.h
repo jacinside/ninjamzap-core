@@ -39,8 +39,83 @@
 #ifndef OV_EXCLUDE_STATIC_CALLBACKS
 #define OV_EXCLUDE_STATIC_CALLBACKS
 #endif
-#include "../libvorbisenc.xcframework/ios-arm64/Headers/vorbis/vorbisenc.h"
-#include "../libvorbis.xcframework/ios-arm64/Headers/vorbis/codec.h"
+
+#ifdef __ANDROID__
+  // Android: vorbis headers provided via system include path or NDK build
+  #ifndef NINJAM_NO_VORBIS
+    #include <vorbis/vorbisenc.h>
+    #include <vorbis/codec.h>
+  #endif
+#else
+  // iOS: vorbis headers from pre-built xcframeworks
+  #include "../libvorbisenc.xcframework/ios-arm64/Headers/vorbis/vorbisenc.h"
+  #include "../libvorbis.xcframework/ios-arm64/Headers/vorbis/codec.h"
+#endif
+
+#ifdef NINJAM_NO_VORBIS
+// Stub interfaces/classes for building without vorbis libraries.
+// Audio encode/decode will be non-functional but connection/chat/metronome works.
+#include "WDL/queue.h"
+#include <vector>
+
+class VorbisDecoderInterface {
+public:
+  virtual ~VorbisDecoderInterface(){}
+  virtual int GetSampleRate()=0;
+  virtual int GetNumChannels()=0;
+  virtual void *DecodeGetSrcBuffer(int srclen)=0;
+  virtual void DecodeWrote(int srclen)=0;
+  virtual void Reset()=0;
+  virtual int Available()=0;
+  virtual float *Get()=0;
+  virtual void Skip(int amt)=0;
+  virtual int GenerateLappingSamples()=0;
+};
+
+class VorbisEncoderInterface {
+public:
+  virtual ~VorbisEncoderInterface(){}
+  virtual void Encode(float *in, int inlen, int advance=1, int spacing=1)=0;
+  virtual int isError()=0;
+  virtual int Available()=0;
+  virtual void *Get()=0;
+  virtual void Advance(int)=0;
+  virtual void Compact()=0;
+  virtual void reinit(int bla=0)=0;
+};
+
+class VorbisDecoder : public VorbisDecoderInterface {
+public:
+  VorbisDecoder() : m_srate(48000), m_nch(1) {}
+  int GetSampleRate() { return m_srate; }
+  int GetNumChannels() { return m_nch; }
+  void *DecodeGetSrcBuffer(int srclen) { m_tmpbuf.resize(srclen); return m_tmpbuf.data(); }
+  void DecodeWrote(int srclen) {}
+  void Reset() {}
+  int Available() { return 0; }
+  float *Get() { return NULL; }
+  void Skip(int amt) {}
+  int GenerateLappingSamples() { return 0; }
+private:
+  int m_srate, m_nch;
+  std::vector<char> m_tmpbuf;
+};
+
+class VorbisEncoder : public VorbisEncoderInterface {
+public:
+  VorbisEncoder(int srate, int nch, int serial, float qv, int maxbr=-1, int minbr=-1) {}
+  void Encode(float *in, int inlen, int advance=1, int spacing=1) {}
+  int isError() { return 0; }
+  int Available() { return 0; }
+  void *Get() { return NULL; }
+  void Advance(int) {}
+  void Compact() {}
+  void reinit(int bla=0) {}
+  void SetVBR(float qv) {}
+  void SetTag(const char *name, const char *val) {}
+  WDL_Queue m_outqueue;
+};
+#else // NINJAM_NO_VORBIS
 
 class VorbisDecoderInterface
 {
@@ -580,5 +655,7 @@ public:
 } WDL_FIXALIGN;
 
 #endif//WDL_VORBIS_INTERFACE_ONLY
+
+#endif // !NINJAM_NO_VORBIS
 
 #endif//_VORBISENCDEC_H_
