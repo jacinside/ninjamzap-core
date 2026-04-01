@@ -202,6 +202,12 @@ const char* NinjamClient_getErrorString(NinjamClientRef* client) {
     return errorStr.c_str();
 }
 
+const char* NinjamClient_getLocalUserName(NinjamClientRef* client) {
+    auto adapter = getAdapter(client);
+    if (!adapter) return "";
+    return adapter->getLocalUserName();
+}
+
 // Callback setup
 void NinjamClient_setOnConnected(NinjamClientRef* client, ConnectedCallback callback) {
     if (client) {

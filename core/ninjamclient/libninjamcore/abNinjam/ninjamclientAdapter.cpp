@@ -587,6 +587,13 @@ std::string NinjamClientAdapter::getErrorString() {
     return "";
 }
 
+const char* NinjamClientAdapter::getLocalUserName() {
+    if (connected && client) {
+        return client->gsNjClient()->GetUser();
+    }
+    return "";
+}
+
 // Implementation of syncWithServerClock
 void NinjamClientAdapter::syncWithServerClock() {
     if (!connected || !client) return;

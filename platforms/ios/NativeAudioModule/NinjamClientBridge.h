@@ -109,6 +109,7 @@ int32_t NinjamClient_getBPM(NinjamClientRef* client);
 int32_t NinjamClient_getBPI(NinjamClientRef* client);
 double NinjamClient_getIntervalPosition(NinjamClientRef* client);
 const char* NinjamClient_getErrorString(NinjamClientRef* client);
+const char* NinjamClient_getLocalUserName(NinjamClientRef* client);
 
 // Callbacks
 typedef void (*MessageCallback)(uint16_t type, const uint8_t* data, int32_t size);

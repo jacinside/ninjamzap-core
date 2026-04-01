@@ -117,6 +117,7 @@ public:
     // Server information
     std::string getServerStatus();
     std::string getErrorString();
+    const char* getLocalUserName();
   
     // Metronome playback
     void playMetronomeTick(bool isDownbeat);

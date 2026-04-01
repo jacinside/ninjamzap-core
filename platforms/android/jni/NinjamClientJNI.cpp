@@ -487,6 +487,13 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetLocalChannelName(
     return env->NewStringUTF(name ? name : "");
 }
 
+JNIEXPORT jstring JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetLocalUserName(JNIEnv* env, jobject thiz, jlong clientPtr) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    const char* name = NinjamClient_getLocalUserName(client);
+    return env->NewStringUTF(name ? name : "");
+}
+
 // ============================================================================
 // Callback Setup
 // ============================================================================
