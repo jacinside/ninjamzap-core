@@ -430,6 +430,64 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetUserChannelPeaks(
 }
 
 // ============================================================================
+// User Channel Queries
+// ============================================================================
+JNIEXPORT jstring JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetUserChannelName(JNIEnv* env, jobject thiz, jlong clientPtr, jstring username, jint channelIndex) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    const char* user = env->GetStringUTFChars(username, nullptr);
+    const char* name = NinjamClient_getUserChannelName(client, user, channelIndex);
+    env->ReleaseStringUTFChars(username, user);
+    return env->NewStringUTF(name ? name : "");
+}
+
+// Returns channel state as float array: [volume, pan, muted, subscribed, isStereo, channelPairIndex]
+JNIEXPORT jfloatArray JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetUserChannelState(JNIEnv* env, jobject thiz, jlong clientPtr, jstring username, jint channelIndex) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    const char* user = env->GetStringUTFChars(username, nullptr);
+
+    float volume = 1.0f, pan = 0.0f;
+    int32_t muted = 0, subscribed = 1;
+    bool isStereo = false;
+    int32_t channelPairIndex = -1;
+
+    int32_t result = NinjamClient_getUserChannelState(client, user, channelIndex,
+        &volume, &pan, &muted, &subscribed, &isStereo, &channelPairIndex);
+
+    env->ReleaseStringUTFChars(username, user);
+
+    jfloatArray state = env->NewFloatArray(7);
+    float data[7] = {
+        (float)result,           // [0] success (1) or not (0)
+        volume,                  // [1]
+        pan,                     // [2]
+        (float)muted,            // [3]
+        (float)subscribed,       // [4]
+        isStereo ? 1.0f : 0.0f, // [5]
+        (float)channelPairIndex  // [6]
+    };
+    env->SetFloatArrayRegion(state, 0, 7, data);
+    return state;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeIsUserSoloed(JNIEnv* env, jobject thiz, jlong clientPtr, jstring username) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    const char* user = env->GetStringUTFChars(username, nullptr);
+    int result = NinjamClient_isUserSoloed(client, user);
+    env->ReleaseStringUTFChars(username, user);
+    return result;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetLocalChannelName(JNIEnv* env, jobject thiz, jlong clientPtr, jint channelIndex) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    const char* name = NinjamClient_getLocalChannelName(client, channelIndex);
+    return env->NewStringUTF(name ? name : "");
+}
+
+// ============================================================================
 // Callback Setup
 // ============================================================================
 JNIEXPORT void JNICALL
