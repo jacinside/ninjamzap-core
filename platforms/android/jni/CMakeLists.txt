@@ -12,22 +12,43 @@ set(BRIDGE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../platforms/ios/NativeAudioMod
 set(JNI_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
 # ============================================================================
-# Vorbis configuration
-# For initial builds, we stub out vorbis to get compilation working.
-# Set NINJAM_USE_VORBIS=ON and provide vorbis libs to enable real encoding.
-# ============================================================================
-option(NINJAM_USE_VORBIS "Build with real vorbis libraries" OFF)
-
-# ============================================================================
-# Google Oboe (low-latency audio)
+# Dependencies via FetchContent
 # ============================================================================
 include(FetchContent)
+
+# Google Oboe (low-latency audio)
 FetchContent_Declare(
     oboe
     GIT_REPOSITORY https://github.com/google/oboe.git
     GIT_TAG        1.9.0
 )
-FetchContent_MakeAvailable(oboe)
+
+# libogg (required by libvorbis)
+FetchContent_Declare(
+    ogg
+    GIT_REPOSITORY https://github.com/xiph/ogg.git
+    GIT_TAG        v1.3.5
+)
+
+# libvorbis (audio codec)
+FetchContent_Declare(
+    vorbis
+    GIT_REPOSITORY https://github.com/xiph/vorbis.git
+    GIT_TAG        v1.3.7
+)
+
+# Fetch Oboe and ogg first (vorbis depends on ogg)
+FetchContent_MakeAvailable(oboe ogg)
+
+# Vorbis needs to find ogg — set the paths before making it available
+set(OGG_INCLUDE_DIR ${ogg_SOURCE_DIR}/include ${ogg_BINARY_DIR}/include)
+set(OGG_LIBRARY ogg)
+# Tell vorbis CMake where ogg is
+set(OGG_INCLUDE_DIRS ${OGG_INCLUDE_DIR})
+set(OGG_LIBRARIES ogg)
+set(OGG_FOUND TRUE)
+
+FetchContent_MakeAvailable(vorbis)
 
 # ============================================================================
 # Source files
@@ -72,12 +93,10 @@ set(NINJAM_SOURCES
     # --- WDL Utilities ---
     ${CORE_DIR}/WDL/rng.cpp
     ${CORE_DIR}/WDL/sha.cpp
-)
 
-# Vorbis encoder (C file) — only if using real vorbis
-if(NINJAM_USE_VORBIS)
-    list(APPEND NINJAM_SOURCES ${CORE_DIR}/vorbis_encoder.c)
-endif()
+    # --- Vorbis encoder ---
+    ${CORE_DIR}/vorbis_encoder.c
+)
 
 # ============================================================================
 # Shared library
@@ -95,11 +114,14 @@ target_include_directories(ninjamzap PRIVATE
     ${CORE_DIR}/abNinjam/include      # ninjamclient.h, remoteuser.h, etc.
     ${CORE_DIR}/WDL                   # WDL headers
     ${CORE_DIR}/WDL/jnetlib           # jnetlib headers
+    # Vorbis/ogg headers from fetched source
+    ${ogg_SOURCE_DIR}/include
+    ${ogg_BINARY_DIR}/include         # Generated config_types.h
+    ${vorbis_SOURCE_DIR}/include
 )
 
 # IOSLogger.h does: #include "../LoggerBridge.h" (relative to libninjamcore/)
 # This resolves to core/ninjamclient/LoggerBridge.h — we need our Android version there.
-# Solution: copy our LoggerBridge.h to that location at configure time.
 file(COPY ${JNI_DIR}/LoggerBridge.h DESTINATION ${CORE_DIR}/..)
 
 # ============================================================================
@@ -123,25 +145,14 @@ target_compile_definitions(ninjamzap PRIVATE
     __ANDROID__
 )
 
-if(NOT NINJAM_USE_VORBIS)
-    # Stub out vorbis — compiles without libogg/libvorbis
-    target_compile_definitions(ninjamzap PRIVATE NINJAM_NO_VORBIS)
-    # Override the vorbisencdec.h include to use our stub
-    target_compile_definitions(ninjamzap PRIVATE
-        "vorbisencdec_h_override"
-    )
-endif()
-
 # ============================================================================
 # Link libraries
 # ============================================================================
 target_link_libraries(ninjamzap
     oboe
+    ogg
+    vorbis
+    vorbisenc
     log         # __android_log_print
     android     # Android native APIs
 )
-
-if(NINJAM_USE_VORBIS)
-    # TODO: Add ogg, vorbis, vorbisenc libraries when cross-compiled
-    # target_link_libraries(ninjamzap ogg vorbis vorbisenc)
-endif()
