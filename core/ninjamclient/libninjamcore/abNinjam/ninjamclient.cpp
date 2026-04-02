@@ -56,20 +56,20 @@ NinjamClient::~NinjamClient() {
 
 void keepConnectionThread(NinjamClient *ninjamClient) {
   L_(ltrace) << "Entering keepConnectionThread";
-  // TODO: use scoped_lock for all environments when becomes available
-  //std::lock_guard<std::mutex> lock(ninjamClient->gsMtx());
-#ifdef unix
-  scoped_lock<mutex> lock(ninjamClient->gsMtx());
-#elif defined(_WIN32)
-  lock_guard<mutex> lock(ninjamClient->gsMtx());
-#endif
 
   ninjamClient->gsStopConnectionThread() = false;
   NJClient *g_client = ninjamClient->gsNjClient();
   bool connected = false;
-while (g_client->GetStatus() >= 0 &&
+  while (g_client->GetStatus() >= 0 &&
          ninjamClient->gsStopConnectionThread() == false) {
-    if (g_client->Run()) {
+    // Lock only around Run() — must release before sleeping so other threads
+    // (audio, process timer) can acquire the mutex. Matches iOS pattern.
+    bool didWork;
+    {
+      std::lock_guard<std::mutex> lock(ninjamClient->gsMtx());
+      didWork = g_client->Run();
+    }
+    if (didWork) {
       // Sleep to prevent 100% CPU usage
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
 #ifdef unix

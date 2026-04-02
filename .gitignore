@@ -53,3 +53,4 @@ test_output/
 *.tmp
 *.bak
 *.old
+core/ninjamclient/LoggerBridge.h

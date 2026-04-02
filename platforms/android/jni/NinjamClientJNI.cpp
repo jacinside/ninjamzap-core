@@ -51,6 +51,8 @@ struct JNICallbackContext {
 // In production, use a proper concurrent map. For now, simple static for single-client use.
 static JNICallbackContext g_callbackCtx;
 
+extern "C" {
+
 // ============================================================================
 // JNI Lifecycle
 // ============================================================================
@@ -228,6 +230,94 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetLatency(JNIEnv* e
     return NinjamClient_getLatency(client);
 }
 
+JNIEXPORT jint JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetServerUptime(JNIEnv* env, jobject thiz, jlong clientPtr) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    return NinjamClient_getServerUptime(client);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetErrorString(JNIEnv* env, jobject thiz, jlong clientPtr) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    const char* err = NinjamClient_getErrorString(client);
+    return env->NewStringUTF(err ? err : "");
+}
+
+JNIEXPORT jfloat JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetOutputPeak(JNIEnv* env, jobject thiz, jlong clientPtr, jint channel) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    return NinjamClient_getOutputPeak(client, channel);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativePlayMetronomeTick(JNIEnv* env, jobject thiz, jlong clientPtr, jint isDownbeat) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    NinjamClient_playMetronomeTick(client, isDownbeat);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeRemoveLocalChannel(JNIEnv* env, jobject thiz, jlong clientPtr, jint channelIndex) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    NinjamClient_removeLocalChannel(client, channelIndex);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetLocalChannelVolume(JNIEnv* env, jobject thiz, jlong clientPtr, jint channelIndex, jfloat volume) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    NinjamClient_setLocalChannelVolume(client, channelIndex, volume);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSyncWithServerClock(JNIEnv* env, jobject thiz, jlong clientPtr) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    NinjamClient_syncWithServerClock(client);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSubmitAudioData(JNIEnv* env, jobject thiz, jlong clientPtr, jint channelIndex, jfloatArray data, jint numFrames) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    jfloat* buf = env->GetFloatArrayElements(data, nullptr);
+    NinjamClient_submitAudioData(client, channelIndex, buf, numFrames);
+    env->ReleaseFloatArrayElements(data, buf, JNI_ABORT);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSubmitAudioDataForSync(JNIEnv* env, jobject thiz, jlong clientPtr, jint channelIndex, jfloatArray data, jint numFrames) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    jfloat* buf = env->GetFloatArrayElements(data, nullptr);
+    NinjamClient_submitAudioDataForSync(client, channelIndex, buf, numFrames);
+    env->ReleaseFloatArrayElements(data, buf, JNI_ABORT);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSubscribeToAllChannels(JNIEnv* env, jobject thiz, jlong clientPtr) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    NinjamClient_subscribeToAllChannel(client);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetRemoteChannelVolume(JNIEnv* env, jobject thiz, jlong clientPtr, jstring username, jint channelIndex, jfloat volume) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    const char* user = env->GetStringUTFChars(username, nullptr);
+    NinjamClient_setRemoteChannelVolume(client, user, channelIndex, volume);
+    env->ReleaseStringUTFChars(username, user);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSendAdminMessage(JNIEnv* env, jobject thiz, jlong clientPtr, jstring message) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    const char* msg = env->GetStringUTFChars(message, nullptr);
+    NinjamClient_sendAdminMessage(client, msg);
+    env->ReleaseStringUTFChars(message, msg);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetUserName(JNIEnv* env, jobject thiz, jlong clientPtr, jint index) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    const char* name = NinjamClient_getUserName(client, index);
+    return env->NewStringUTF(name ? name : "");
+}
+
 // ============================================================================
 // Audio Processing
 // ============================================================================
@@ -391,6 +481,12 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetRemoteUserNames(J
     return result;
 }
 
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeInvalidateUsersCache(JNIEnv* env, jobject thiz, jlong clientPtr) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    NinjamClient_invalidateUsersCache(client);
+}
+
 JNIEXPORT jint JNICALL
 Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetUserChannelCount(JNIEnv* env, jobject thiz, jlong clientPtr, jstring username) {
     auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
@@ -538,8 +634,6 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetCallbackTarget(JN
 // Global engine instance (one per app, like iOS AudioSessionManager)
 static OboeEngine* g_engine = nullptr;
 
-extern "C" {
-
 JNIEXPORT jlong JNICALL
 Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeCreateAudioEngine(JNIEnv* env, jobject thiz) {
     if (g_engine) {
@@ -611,4 +705,4 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeAudioEngineGetInputP
     env->ReleaseFloatArrayElements(peaks, p, 0);
 }
 
-} // extern "C"
+} // extern "C" (audio engine block - now merged into top-level)
