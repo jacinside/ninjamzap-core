@@ -19,6 +19,14 @@ void NinjamOboeCallback::setInputStream(oboe::AudioStream* inputStream) {
     m_inputStream = inputStream;
 }
 
+void NinjamOboeCallback::setFXProcessor(AudioFXProcessor* fxProcessor) {
+    m_fxProcessor = fxProcessor;
+}
+
+void NinjamOboeCallback::setRecorder(SessionRecorder* recorder) {
+    m_recorder = recorder;
+}
+
 oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
     oboe::AudioStream* outputStream,
     void* audioData,
@@ -58,6 +66,11 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
         }
     }
 
+    // Apply FX to local input before NINJAM processing (mic boost → compressor → reverb)
+    if (m_fxProcessor) {
+        m_fxProcessor->process(m_inLeft, m_inRight, framesToProcess);
+    }
+
     // Process through NINJAM (mixes local input with remote streams)
     memset(m_outLeft, 0, framesToProcess * sizeof(float));
     memset(m_outRight, 0, framesToProcess * sizeof(float));
@@ -74,6 +87,17 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
     // Track output peaks
     m_outputPeakL.store(calculatePeak(m_outLeft, framesToProcess), std::memory_order_relaxed);
     m_outputPeakR.store(calculatePeak(m_outRight, framesToProcess), std::memory_order_relaxed);
+
+    // Recording tap: capture output + input mix (same as iOS)
+    if (m_recorder && m_recorder->isRecording()) {
+        float recL[MAX_FRAMES];
+        float recR[MAX_FRAMES];
+        for (int32_t i = 0; i < framesToProcess; i++) {
+            recL[i] = m_outLeft[i] + m_inLeft[i];
+            recR[i] = m_outRight[i] + m_inRight[i];
+        }
+        m_recorder->writeSamples(recL, recR, framesToProcess);
+    }
 
     // Interleave output for Oboe (stereo output stream)
     int32_t outputChannels = outputStream->getChannelCount();

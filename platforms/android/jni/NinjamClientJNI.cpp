@@ -705,4 +705,149 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeAudioEngineGetInputP
     env->ReleaseFloatArrayElements(peaks, p, 0);
 }
 
-} // extern "C" (audio engine block - now merged into top-level)
+// ============================================================================
+// Session Recording
+// ============================================================================
+
+JNIEXPORT jboolean JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeStartRecording(JNIEnv* env, jobject thiz, jlong enginePtr,
+    jstring recordingsDir, jstring roomName, jstring myUsername, jobjectArray participants) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!engine || !engine->getRecorder()) return JNI_FALSE;
+
+    const char* dir = env->GetStringUTFChars(recordingsDir, nullptr);
+    const char* room = env->GetStringUTFChars(roomName, nullptr);
+    const char* user = env->GetStringUTFChars(myUsername, nullptr);
+
+    int count = env->GetArrayLength(participants);
+    std::vector<const char*> parts(count);
+    std::vector<jstring> jParts(count);
+    for (int i = 0; i < count; i++) {
+        jParts[i] = (jstring)env->GetObjectArrayElement(participants, i);
+        parts[i] = env->GetStringUTFChars(jParts[i], nullptr);
+    }
+
+    bool result = engine->getRecorder()->start(dir, room, user, parts.data(), count);
+
+    for (int i = 0; i < count; i++) {
+        env->ReleaseStringUTFChars(jParts[i], parts[i]);
+        env->DeleteLocalRef(jParts[i]);
+    }
+    env->ReleaseStringUTFChars(myUsername, user);
+    env->ReleaseStringUTFChars(roomName, room);
+    env->ReleaseStringUTFChars(recordingsDir, dir);
+
+    return result ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jobjectArray JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeStopRecording(JNIEnv* env, jobject thiz, jlong enginePtr,
+    jobjectArray currentParticipants) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!engine || !engine->getRecorder()) return nullptr;
+
+    int partCount = currentParticipants ? env->GetArrayLength(currentParticipants) : 0;
+    std::vector<const char*> parts(partCount);
+    std::vector<jstring> jParts(partCount);
+    for (int i = 0; i < partCount; i++) {
+        jParts[i] = (jstring)env->GetObjectArrayElement(currentParticipants, i);
+        parts[i] = env->GetStringUTFChars(jParts[i], nullptr);
+    }
+
+    char tempPath[512] = {};
+    char roomNameBuf[256] = {};
+    char suggestedFilename[512] = {};
+    double duration = 0;
+    int64_t fileSize = 0;
+
+    bool stopped = engine->getRecorder()->stop(
+        partCount > 0 ? parts.data() : nullptr, partCount,
+        tempPath, sizeof(tempPath),
+        roomNameBuf, sizeof(roomNameBuf),
+        suggestedFilename, sizeof(suggestedFilename),
+        &duration, &fileSize);
+
+    for (int i = 0; i < partCount; i++) {
+        env->ReleaseStringUTFChars(jParts[i], parts[i]);
+        env->DeleteLocalRef(jParts[i]);
+    }
+
+    if (!stopped) return nullptr;
+
+    // Return as String array: [tempPath, roomName, suggestedFilename, duration, fileSize]
+    jclass stringClass = env->FindClass("java/lang/String");
+    jobjectArray result = env->NewObjectArray(5, stringClass, nullptr);
+
+    char durationStr[32], fileSizeStr[32];
+    snprintf(durationStr, sizeof(durationStr), "%.3f", duration);
+    snprintf(fileSizeStr, sizeof(fileSizeStr), "%lld", (long long)fileSize);
+
+    env->SetObjectArrayElement(result, 0, env->NewStringUTF(tempPath));
+    env->SetObjectArrayElement(result, 1, env->NewStringUTF(roomNameBuf));
+    env->SetObjectArrayElement(result, 2, env->NewStringUTF(suggestedFilename));
+    env->SetObjectArrayElement(result, 3, env->NewStringUTF(durationStr));
+    env->SetObjectArrayElement(result, 4, env->NewStringUTF(fileSizeStr));
+
+    return result;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSaveRecording(JNIEnv* env, jobject thiz, jlong enginePtr, jstring finalPath) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!engine || !engine->getRecorder()) return JNI_FALSE;
+
+    const char* path = env->GetStringUTFChars(finalPath, nullptr);
+    bool result = engine->getRecorder()->save(path);
+    env->ReleaseStringUTFChars(finalPath, path);
+    return result ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeDiscardRecording(JNIEnv* env, jobject thiz, jlong enginePtr) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (engine && engine->getRecorder()) engine->getRecorder()->discard();
+}
+
+JNIEXPORT jdouble JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetRecordingElapsedTime(JNIEnv* env, jobject thiz, jlong enginePtr) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!engine || !engine->getRecorder()) return 0.0;
+    return engine->getRecorder()->getElapsedTime();
+}
+
+// ============================================================================
+// Audio FX Processing
+// ============================================================================
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetFxEnabled(JNIEnv* env, jobject thiz, jlong enginePtr, jstring fxName, jboolean enabled) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!engine || !engine->getFXProcessor()) return;
+    const char* name = env->GetStringUTFChars(fxName, nullptr);
+    engine->getFXProcessor()->setEnabled(name, enabled);
+    env->ReleaseStringUTFChars(fxName, name);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetFxParameter(JNIEnv* env, jobject thiz, jlong enginePtr, jstring fxName, jstring param, jfloat value) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!engine || !engine->getFXProcessor()) return;
+    const char* name = env->GetStringUTFChars(fxName, nullptr);
+    const char* p = env->GetStringUTFChars(param, nullptr);
+    engine->getFXProcessor()->setParameter(name, p, value);
+    env->ReleaseStringUTFChars(param, p);
+    env->ReleaseStringUTFChars(fxName, name);
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetFxState(JNIEnv* env, jobject thiz, jlong enginePtr) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    jfloatArray result = env->NewFloatArray(11);
+    if (!engine || !engine->getFXProcessor()) return result;
+    float state[11];
+    engine->getFXProcessor()->getState(state);
+    env->SetFloatArrayRegion(result, 0, 11, state);
+    return result;
+}
+
+} // extern "C"

@@ -3,6 +3,8 @@
 
 #include <oboe/Oboe.h>
 #include "NinjamClientBridge.h"
+#include "AudioFXProcessor.h"
+#include "SessionRecorder.h"
 
 /**
  * Oboe AudioStreamCallback for full-duplex audio processing.
@@ -25,6 +27,12 @@ public:
     // Set the NINJAM client to process audio through
     void setClient(NinjamClientRef* client);
 
+    // Set the FX processor for local input effects
+    void setFXProcessor(AudioFXProcessor* fxProcessor);
+
+    // Set the session recorder for recording tap
+    void setRecorder(SessionRecorder* recorder);
+
     // Called by Oboe on the audio thread when output needs data
     oboe::DataCallbackResult onAudioReady(
         oboe::AudioStream* outputStream,
@@ -44,6 +52,8 @@ public:
 
 private:
     NinjamClientRef* m_client = nullptr;
+    AudioFXProcessor* m_fxProcessor = nullptr;
+    SessionRecorder* m_recorder = nullptr;
     oboe::AudioStream* m_inputStream = nullptr;
 
     // Intermediate buffers for deinterleaving stereo to L/R

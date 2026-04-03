@@ -59,6 +59,8 @@ set(NINJAM_SOURCES
     ${JNI_DIR}/AndroidLogger.cpp
     ${JNI_DIR}/OboeCallback.cpp
     ${JNI_DIR}/OboeEngine.cpp
+    ${JNI_DIR}/AudioFXProcessor.cpp
+    ${JNI_DIR}/SessionRecorder.cpp
     ${JNI_DIR}/fileutil_android.cpp
 
     # --- C Bridge (shared with iOS) ---
@@ -154,6 +156,7 @@ target_link_libraries(ninjamzap
     ogg
     vorbis
     vorbisenc
+    mediandk    # AMediaCodec, AMediaMuxer (AAC encoding)
     log         # __android_log_print
     android     # Android native APIs
 )

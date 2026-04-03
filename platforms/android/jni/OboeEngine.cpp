@@ -7,6 +7,10 @@
 
 OboeEngine::OboeEngine() {
     m_callback = std::make_shared<NinjamOboeCallback>();
+    m_fxProcessor = std::make_unique<AudioFXProcessor>();
+    m_recorder = std::make_unique<SessionRecorder>();
+    m_callback->setFXProcessor(m_fxProcessor.get());
+    m_callback->setRecorder(m_recorder.get());
 }
 
 OboeEngine::~OboeEngine() {

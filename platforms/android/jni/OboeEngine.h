@@ -4,6 +4,7 @@
 #include <oboe/Oboe.h>
 #include "OboeCallback.h"
 #include "NinjamClientBridge.h"
+#include "SessionRecorder.h"
 #include <memory>
 #include <atomic>
 
@@ -22,6 +23,12 @@ public:
 
     // Set the NINJAM client (must be called before start)
     void setClient(NinjamClientRef* client);
+
+    // Get FX processor (created in constructor, lives for engine lifetime)
+    AudioFXProcessor* getFXProcessor() { return m_fxProcessor.get(); }
+
+    // Get session recorder (created in constructor, lives for engine lifetime)
+    SessionRecorder* getRecorder() { return m_recorder.get(); }
 
     // Start audio streams (returns true on success)
     bool start(int32_t sampleRate, int32_t framesPerBuffer);
@@ -53,6 +60,12 @@ private:
 
     // Callback (shared between input and output)
     std::shared_ptr<NinjamOboeCallback> m_callback;
+
+    // FX processor (owned by engine, used by callback on audio thread)
+    std::unique_ptr<AudioFXProcessor> m_fxProcessor;
+
+    // Session recorder (owned by engine, used by callback on audio thread)
+    std::unique_ptr<SessionRecorder> m_recorder;
 
     // Client reference
     NinjamClientRef* m_client = nullptr;

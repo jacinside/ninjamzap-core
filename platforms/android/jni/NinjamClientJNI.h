@@ -135,6 +135,26 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetUserChannelPeaks(
 JNIEXPORT void JNICALL
 Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetCallbackTarget(JNIEnv* env, jobject thiz, jlong clientPtr, jobject callbackTarget);
 
+// ============================================================================
+// Session Recording
+// ============================================================================
+JNIEXPORT jboolean JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeStartRecording(JNIEnv* env, jobject thiz, jlong enginePtr,
+    jstring recordingsDir, jstring roomName, jstring myUsername, jobjectArray participants);
+
+JNIEXPORT jobjectArray JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeStopRecording(JNIEnv* env, jobject thiz, jlong enginePtr,
+    jobjectArray currentParticipants);
+
+JNIEXPORT jboolean JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSaveRecording(JNIEnv* env, jobject thiz, jlong enginePtr, jstring finalPath);
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeDiscardRecording(JNIEnv* env, jobject thiz, jlong enginePtr);
+
+JNIEXPORT jdouble JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetRecordingElapsedTime(JNIEnv* env, jobject thiz, jlong enginePtr);
+
 #ifdef __cplusplus
 }
 #endif
