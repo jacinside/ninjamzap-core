@@ -614,6 +614,16 @@ NJClient::NJClient()
   ChatMessage_User=0;
   ChannelMixer=0;
   ChannelMixer_User=0;
+  RawData_Callback=0;
+  RawData_User=0;
+  IntervalSwap_Callback=0;
+  IntervalSwap_User=0;
+
+  m_video_active=false;
+  m_video_fourcc=0;
+  m_video_chidx=0;
+  memset(m_video_guid,0,16);
+  m_video_interval_open=false;
 
   waveWrite=0;
 #ifndef NJCLIENT_NO_XMIT_SUPPORT
@@ -739,6 +749,10 @@ NJClient::~NJClient()
   m_downloads.Empty();
   for (x = 0; x < m_locchannels.GetSize(); x ++) delete m_locchannels.Get(x);
   m_locchannels.Empty();
+  for (x = 0; x < m_rawdata_sendq.GetSize(); x ++) delete m_rawdata_sendq.Get(x);
+  m_rawdata_sendq.Empty();
+  for (x = 0; x < m_rawdata_downloads.GetSize(); x ++) delete m_rawdata_downloads.Get(x);
+  m_rawdata_downloads.Empty();
 
   delete m_wavebq;
 }
@@ -1241,8 +1255,20 @@ int NJClient::Run() // nonzero if sleep ok
                   }
                   //else OutputDebugString("woulda added silence to channel\n");
                 }
-                else if (dib.fourcc) // download coming
-                {                
+                else if (dib.fourcc && dib.fourcc != NJ_ENCODER_FMT_TYPE && RawData_Callback) // raw data channel
+                {
+                  if (config_debug_level>1) printf("RECV RAW BEGIN %s fourcc=%08x\n",guidtostr_tmp(dib.guid),dib.fourcc);
+                  RawDataDownloadTracker *tracker = new RawDataDownloadTracker;
+                  memcpy(tracker->guid, dib.guid, 16);
+                  tracker->fourcc = dib.fourcc;
+                  lstrcpyn_safe(tracker->username, dib.username, sizeof(tracker->username));
+                  tracker->chidx = dib.chidx;
+                  m_rawdata_downloads.Add(tracker);
+
+                  RawData_Callback(RawData_User, 0, dib.guid, dib.fourcc, dib.username, dib.chidx, NULL, 0);
+                }
+                else if (dib.fourcc) // download coming (audio/OGGv)
+                {
                   if (config_debug_level>1) printf("RECV BLOCK %s\n",guidtostr_tmp(dib.guid));
                   RemoteDownload *ds=new RemoteDownload;
                   memcpy(ds->guid,dib.guid,sizeof(ds->guid));
@@ -1273,8 +1299,38 @@ int NJClient::Run() // nonzero if sleep ok
         case MESSAGE_SERVER_DOWNLOAD_INTERVAL_WRITE:
           {
             mpb_server_download_interval_write diw;
-            if (!diw.parse(msg)) 
+            if (!diw.parse(msg))
             {
+              // Check raw data downloads first
+              bool handledAsRaw = false;
+              if (RawData_Callback)
+              {
+                for (int ri = 0; ri < m_rawdata_downloads.GetSize(); ri++)
+                {
+                  RawDataDownloadTracker *tracker = m_rawdata_downloads.Get(ri);
+                  if (tracker && !memcmp(tracker->guid, diw.guid, 16))
+                  {
+                    if (diw.audio_data_len > 0 && diw.audio_data)
+                    {
+                      RawData_Callback(RawData_User, 1, tracker->guid, tracker->fourcc,
+                                       tracker->username, tracker->chidx,
+                                       diw.audio_data, diw.audio_data_len);
+                    }
+                    if (diw.flags & 1) // end
+                    {
+                      RawData_Callback(RawData_User, 2, tracker->guid, tracker->fourcc,
+                                       tracker->username, tracker->chidx, NULL, 0);
+                      delete tracker;
+                      m_rawdata_downloads.Delete(ri);
+                    }
+                    handledAsRaw = true;
+                    break;
+                  }
+                }
+              }
+
+              if (!handledAsRaw)
+              {
               time_t now;
               time(&now);
               int x;
@@ -1308,6 +1364,7 @@ int NJClient::Run() // nonzero if sleep ok
                   }
                 }
               }
+              } // if (!handledAsRaw)
             }
           }
         break;
@@ -1407,6 +1464,8 @@ int NJClient::Run() // nonzero if sleep ok
   for (u = 0; u < m_locchannels.GetSize(); u ++)
   {
     Local_Channel *lc=m_locchannels.Get(u);
+    // Skip video-only channels — they use raw data transport, not the audio pipeline
+    if (lc->flags & 0x10) continue;
     WDL_HeapBuf *p=0;
     int block_nch=1;
 
@@ -1655,15 +1714,148 @@ int NJClient::Run() // nonzero if sleep ok
   }
 #endif
 
+  // Drain raw data send queue
+  if (m_netcon)
+  {
+    m_rawdata_sendq_cs.Enter();
+    while (m_rawdata_sendq.GetSize())
+    {
+      RawDataQueueItem *item = m_rawdata_sendq.Get(0);
+      m_rawdata_sendq.Delete(0);
+      m_rawdata_sendq_cs.Leave();
+
+      if (item->type == 0) // begin
+      {
+        mpb_client_upload_interval_begin cuib;
+        memcpy(cuib.guid, item->guid, 16);
+        cuib.fourcc = item->fourcc;
+        cuib.chidx = item->chidx;
+        cuib.estsize = item->estsize;
+        m_netcon->Send(cuib.build());
+      }
+      else // data/end
+      {
+        int remaining = item->data.GetSize();
+        const unsigned char *ptr = (const unsigned char *)item->data.Get();
+        if (remaining == 0)
+        {
+          // End marker with no data
+          mpb_client_upload_interval_write wh;
+          memcpy(wh.guid, item->guid, 16);
+          wh.flags = item->flags;
+          wh.audio_data = NULL;
+          wh.audio_data_len = 0;
+          m_netcon->Send(wh.build());
+        }
+        else
+        {
+          while (remaining > 0)
+          {
+            int chunk = remaining;
+            if (chunk > MAX_ENC_BLOCKSIZE) chunk = MAX_ENC_BLOCKSIZE;
+
+            mpb_client_upload_interval_write wh;
+            memcpy(wh.guid, item->guid, 16);
+            wh.audio_data = ptr;
+            wh.audio_data_len = chunk;
+            remaining -= chunk;
+            ptr += chunk;
+            wh.flags = (remaining <= 0 && (item->flags & 1)) ? 1 : 0;
+            m_netcon->Send(wh.build());
+          }
+        }
+      }
+
+      delete item;
+      m_rawdata_sendq_cs.Enter();
+    }
+    m_rawdata_sendq_cs.Leave();
+  }
+
   return wantsleep;
 
 }
 
 
+void NJClient::RawDataSendBegin(unsigned char outGuid[16], unsigned int fourcc, int chidx, int estsize)
+{
+  WDL_RNG_bytes(outGuid, 16);
+
+  RawDataQueueItem *item = new RawDataQueueItem;
+  item->type = 0; // begin
+  memcpy(item->guid, outGuid, 16);
+  item->fourcc = fourcc;
+  item->chidx = chidx;
+  item->estsize = estsize;
+  item->flags = 0;
+
+  m_rawdata_sendq_cs.Enter();
+  m_rawdata_sendq.Add(item);
+  m_rawdata_sendq_cs.Leave();
+}
+
+void NJClient::RawDataSendWrite(const unsigned char guid[16], const void *data, int dataLen, bool isEnd)
+{
+  RawDataQueueItem *item = new RawDataQueueItem;
+  item->type = 1; // data/end
+  memcpy(item->guid, guid, 16);
+  item->fourcc = 0;
+  item->chidx = 0;
+  item->estsize = 0;
+  item->flags = isEnd ? 1 : 0;
+  if (data && dataLen > 0)
+  {
+    item->data.Resize(dataLen);
+    memcpy(item->data.Get(), data, dataLen);
+  }
+
+  m_rawdata_sendq_cs.Enter();
+  m_rawdata_sendq.Add(item);
+  m_rawdata_sendq_cs.Leave();
+}
+
+void NJClient::SetVideoChannel(int chidx, unsigned int fourcc)
+{
+  m_video_chidx = chidx;
+  m_video_fourcc = fourcc;
+  m_video_active = true;
+}
+
+void NJClient::StopVideoChannel()
+{
+  // Don't send END immediately — let on_new_interval() handle it at the
+  // interval boundary so video END stays synced with audio interval swap.
+  // Frames are dropped until then because m_video_active guard check fails.
+  m_video_active = false;
+}
+
+void NJClient::QueueVideoFrame(const void *data, int len)
+{
+  if (!m_video_active || !m_video_interval_open) return;
+  if (data && len > 0)
+    RawDataSendWrite(m_video_guid, data, len, false);
+}
+
+void NJClient::SetVideoSPSPPS(const void *data, int len)
+{
+  m_video_spspps_cs.Enter();
+  if (data && len > 0)
+  {
+    m_video_spspps.Resize(len);
+    memcpy(m_video_spspps.Get(), data, len);
+  }
+  else
+  {
+    m_video_spspps.Resize(0);
+  }
+  m_video_spspps_cs.Leave();
+}
+
+
 DecodeState *NJClient::start_decode(unsigned char *guid, int chanflags, unsigned int fourcc, DecodeMediaBuffer *decbuf)
 {
-  DecodeState *newstate=new DecodeState;  
-  if (decbuf) 
+  DecodeState *newstate=new DecodeState;
+  if (decbuf)
   {
     decbuf->AddRef();
     newstate->decode_buf=decbuf;
@@ -1817,7 +2009,7 @@ void NJClient::process_samples(float **inbuf, int innch, float **outbuf, int out
       else
         lc->m_curwritefile_curbuflen=0.0;
 
-      if (lc->bcast_active)
+      if (lc->bcast_active) 
       {
         lc->m_bq.AddBlock(sc_nch,0.0,src,len,src2);
         lc->m_curwritefile_curbuflen += len;
@@ -1894,7 +2086,6 @@ void NJClient::process_samples(float **inbuf, int innch, float **outbuf, int out
   }
 
   m_locchan_cs.Leave();
-
 
   if (!justmonitor)
   {
@@ -2441,10 +2632,11 @@ void NJClient::on_new_interval()
   {
     Local_Channel *lc=m_locchannels.Get(u);
     if (lc->channel_idx >= m_max_localch) continue;
+    if (lc->flags & 0x10) continue; // Skip video-only channels
 
     if (!(lc->flags&(4|2)))  // session mode and voice chat modes use their own (fixed) intervals
     {
-      if (lc->bcast_active) 
+      if (lc->bcast_active)
       {
         lc->m_bq.AddBlock(0,0.0,NULL,0);
       }
@@ -2497,6 +2689,29 @@ void NJClient::on_new_interval()
     }
   }
   m_users_cs.Leave();
+
+  // Video channel: end previous interval and begin new one (same thread as audio)
+  if (m_video_active) {
+    if (m_video_interval_open)
+      RawDataSendWrite(m_video_guid, NULL, 0, true); // END previous
+    RawDataSendBegin(m_video_guid, m_video_fourcc, m_video_chidx, 0); // BEGIN new
+    m_video_interval_open = true;
+    // Send cached SPS/PPS as first chunk so receiver can init decoder
+    m_video_spspps_cs.Enter();
+    if (m_video_spspps.GetSize() > 0)
+      RawDataSendWrite(m_video_guid, m_video_spspps.Get(), m_video_spspps.GetSize(), false);
+    m_video_spspps_cs.Leave();
+  } else if (m_video_interval_open) {
+    // Video was deactivated mid-interval — send END at interval boundary
+    // so it stays synced with the audio interval swap
+    RawDataSendWrite(m_video_guid, NULL, 0, true);
+    m_video_interval_open = false;
+  }
+
+  // Notify that audio interval just swapped — video playback should start now
+  if (IntervalSwap_Callback) {
+    IntervalSwap_Callback(IntervalSwap_User);
+  }
 }  //if (m_enc->isError()) printf("ERROR\n");
   //else printf("YAY\n");
 
@@ -3159,8 +3374,8 @@ void RemoteDownload::Write(const void *buf, int len)
 }
 
 
-Local_Channel::Local_Channel() : channel_idx(0), src_channel(0), volume(1.0f), pan(0.0f),
-                muted(false), solo(false), broadcasting(false),
+Local_Channel::Local_Channel() : channel_idx(0), src_channel(0), volume(1.0f), pan(0.0f), 
+                muted(false), solo(false), broadcasting(false), 
 #ifndef NJCLIENT_NO_XMIT_SUPPORT
                 m_enc(NULL), 
                 m_enc_bitrate_used(0), 
