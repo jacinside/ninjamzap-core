@@ -149,7 +149,6 @@ public:
   int GetUserChannelDecodedNch(int useridx, int channelidx); // returns decoded Vorbis channel count (1=mono, 2=stereo, 0=not yet decoded)
   double GetUserSessionPos(int useridx, time_t *lastupdatetime, double *maxlen);
   char *GetUserChannelState(int useridx, int channelidx, bool *sub=0, float *vol=0, float *pan=0, bool *mute=0, bool *solo=0, int *outchannel=0, int *flags=0);
-  int GetUserChannelDecodedNch(int useridx, int channelidx); // returns decoded Vorbis channel count (1=mono, 2=stereo, 0=not yet decoded)
   void SetUserChannelState(int useridx, int channelidx, bool setsub, bool sub, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute, bool setsolo, bool solo, bool setoutch=false, int outchannel=0);
   int EnumUserChannels(int useridx, int i); // returns <0 if out of channels. start with i=0, and go upwards
 
@@ -219,6 +218,14 @@ public:
   typedef void (*IntervalSwapCallback)(void *userData);
   IntervalSwapCallback IntervalSwap_Callback;
   void *IntervalSwap_User;
+
+  // Called when a complete video interval is ready for playback (same moment as audio swap).
+  // Delivers all raw data chunks accumulated during the previous interval.
+  // userData, username, chidx, fourcc, data (all chunks concatenated), dataLen
+  typedef void (*VideoIntervalReadyCallback)(void *userData, const char *username, int chidx,
+                                              unsigned int fourcc, const void *data, int dataLen);
+  VideoIntervalReadyCallback VideoIntervalReady_Callback;
+  void *VideoIntervalReady_User;
 
   // Video channel management — interval BEGIN/END driven from on_new_interval()
   void SetVideoChannel(int chidx, unsigned int fourcc);
@@ -328,6 +335,22 @@ protected:
   bool m_video_interval_open;
   WDL_HeapBuf m_video_spspps;
   WDL_Mutex m_video_spspps_cs;
+
+  // Video receive double-buffer — mirrors audio's next_ds[0]/next_ds[1] pattern.
+  // Raw data accumulates in m_video_recv_current during the interval,
+  // then swaps to m_video_recv_ready in on_new_interval() (same moment as audio swap).
+  struct VideoRecvBuffer {
+    WDL_HeapBuf data;
+    char username[256];
+    unsigned int fourcc;
+    int chidx;
+    bool active;
+    VideoRecvBuffer() : fourcc(0), chidx(0), active(false) { username[0] = 0; }
+    void reset() { data.Resize(0); fourcc = 0; chidx = 0; active = false; username[0] = 0; }
+  };
+  VideoRecvBuffer m_video_recv_current;  // accumulating during current interval
+  VideoRecvBuffer m_video_recv_ready;    // complete, ready for playback after swap
+  WDL_Mutex m_video_recv_cs;
 };
 
 

@@ -618,6 +618,8 @@ NJClient::NJClient()
   RawData_User=0;
   IntervalSwap_Callback=0;
   IntervalSwap_User=0;
+  VideoIntervalReady_Callback=0;
+  VideoIntervalReady_User=0;
 
   m_video_active=false;
   m_video_fourcc=0;
@@ -1255,7 +1257,7 @@ int NJClient::Run() // nonzero if sleep ok
                   }
                   //else OutputDebugString("woulda added silence to channel\n");
                 }
-                else if (dib.fourcc && dib.fourcc != NJ_ENCODER_FMT_TYPE && RawData_Callback) // raw data channel
+                else if (dib.fourcc && dib.fourcc != NJ_ENCODER_FMT_TYPE && (RawData_Callback || VideoIntervalReady_Callback)) // raw data channel
                 {
                   if (config_debug_level>1) printf("RECV RAW BEGIN %s fourcc=%08x\n",guidtostr_tmp(dib.guid),dib.fourcc);
                   RawDataDownloadTracker *tracker = new RawDataDownloadTracker;
@@ -1265,7 +1267,17 @@ int NJClient::Run() // nonzero if sleep ok
                   tracker->chidx = dib.chidx;
                   m_rawdata_downloads.Add(tracker);
 
-                  RawData_Callback(RawData_User, 0, dib.guid, dib.fourcc, dib.username, dib.chidx, NULL, 0);
+                  // Reset current receive buffer for new interval
+                  m_video_recv_cs.Enter();
+                  m_video_recv_current.reset();
+                  m_video_recv_current.fourcc = dib.fourcc;
+                  m_video_recv_current.chidx = dib.chidx;
+                  lstrcpyn_safe(m_video_recv_current.username, dib.username, sizeof(m_video_recv_current.username));
+                  m_video_recv_current.active = true;
+                  m_video_recv_cs.Leave();
+
+                  if (RawData_Callback)
+                    RawData_Callback(RawData_User, 0, dib.guid, dib.fourcc, dib.username, dib.chidx, NULL, 0);
                 }
                 else if (dib.fourcc) // download coming (audio/OGGv)
                 {
@@ -1310,16 +1322,26 @@ int NJClient::Run() // nonzero if sleep ok
                   RawDataDownloadTracker *tracker = m_rawdata_downloads.Get(ri);
                   if (tracker && !memcmp(tracker->guid, diw.guid, 16))
                   {
+                    // Accumulate raw data into receive buffer (swapped in on_new_interval)
                     if (diw.audio_data_len > 0 && diw.audio_data)
                     {
-                      RawData_Callback(RawData_User, 1, tracker->guid, tracker->fourcc,
-                                       tracker->username, tracker->chidx,
-                                       diw.audio_data, diw.audio_data_len);
+                      m_video_recv_cs.Enter();
+                      int curSize = m_video_recv_current.data.GetSize();
+                      m_video_recv_current.data.Resize(curSize + diw.audio_data_len);
+                      memcpy((char*)m_video_recv_current.data.Get() + curSize,
+                             diw.audio_data, diw.audio_data_len);
+                      m_video_recv_cs.Leave();
+
+                      if (RawData_Callback)
+                        RawData_Callback(RawData_User, 1, tracker->guid, tracker->fourcc,
+                                         tracker->username, tracker->chidx,
+                                         diw.audio_data, diw.audio_data_len);
                     }
-                    if (diw.flags & 1) // end
+                    if (diw.flags & 1) // end — data is complete, will be delivered in on_new_interval
                     {
-                      RawData_Callback(RawData_User, 2, tracker->guid, tracker->fourcc,
-                                       tracker->username, tracker->chidx, NULL, 0);
+                      if (RawData_Callback)
+                        RawData_Callback(RawData_User, 2, tracker->guid, tracker->fourcc,
+                                         tracker->username, tracker->chidx, NULL, 0);
                       delete tracker;
                       m_rawdata_downloads.Delete(ri);
                     }
@@ -1819,6 +1841,19 @@ void NJClient::SetVideoChannel(int chidx, unsigned int fourcc)
   m_video_chidx = chidx;
   m_video_fourcc = fourcc;
   m_video_active = true;
+
+  // If mid-interval and not already open, begin immediately
+  // so frames don't have to wait for the next on_new_interval().
+  // Fixes: re-enabling video transmit caused 0-1 interval delay.
+  if (!m_video_interval_open && m_interval_pos > 0) {
+    RawDataSendBegin(m_video_guid, m_video_fourcc, m_video_chidx, 0);
+    m_video_interval_open = true;
+    // Send cached SPS/PPS so receiver can init decoder
+    m_video_spspps_cs.Enter();
+    if (m_video_spspps.GetSize() > 0)
+      RawDataSendWrite(m_video_guid, m_video_spspps.Get(), m_video_spspps.GetSize(), false);
+    m_video_spspps_cs.Leave();
+  }
 }
 
 void NJClient::StopVideoChannel()
@@ -2708,7 +2743,35 @@ void NJClient::on_new_interval()
     m_video_interval_open = false;
   }
 
-  // Notify that audio interval just swapped — video playback should start now
+  // Video receive buffer swap — deliver completed interval data at the same
+  // moment as audio swap. This ensures video and audio are perfectly synced.
+  m_video_recv_cs.Enter();
+  if (m_video_recv_current.active && m_video_recv_current.data.GetSize() > 0) {
+    // Swap: current → ready (previous ready is overwritten)
+    m_video_recv_ready.reset();
+    m_video_recv_ready.fourcc = m_video_recv_current.fourcc;
+    m_video_recv_ready.chidx = m_video_recv_current.chidx;
+    lstrcpyn_safe(m_video_recv_ready.username, m_video_recv_current.username, sizeof(m_video_recv_ready.username));
+    m_video_recv_ready.active = true;
+    // Move data (swap pointers to avoid copy)
+    int sz = m_video_recv_current.data.GetSize();
+    m_video_recv_ready.data.Resize(sz);
+    memcpy(m_video_recv_ready.data.Get(), m_video_recv_current.data.Get(), sz);
+    m_video_recv_current.data.Resize(0); // keep current active for next interval's data
+  }
+  bool hasVideoReady = m_video_recv_ready.active && m_video_recv_ready.data.GetSize() > 0;
+  m_video_recv_cs.Leave();
+
+  // Deliver video data via callback (same thread, same moment as audio playback start)
+  if (hasVideoReady && VideoIntervalReady_Callback) {
+    VideoIntervalReady_Callback(VideoIntervalReady_User,
+      m_video_recv_ready.username, m_video_recv_ready.chidx,
+      m_video_recv_ready.fourcc, m_video_recv_ready.data.Get(),
+      m_video_recv_ready.data.GetSize());
+    m_video_recv_ready.reset(); // delivered, clear
+  }
+
+  // Notify that audio interval just swapped
   if (IntervalSwap_Callback) {
     IntervalSwap_Callback(IntervalSwap_User);
   }

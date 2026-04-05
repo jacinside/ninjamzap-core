@@ -786,6 +786,13 @@ void NinjamClientAdapter::setIntervalSwapCallback(std::function<void()> callback
     }
 }
 
+void NinjamClientAdapter::setVideoIntervalReadyCallback(NJClient::VideoIntervalReadyCallback callback) {
+    if (client && client->gsNjClient()) {
+        client->gsNjClient()->VideoIntervalReady_Callback = callback;
+        client->gsNjClient()->VideoIntervalReady_User = this;
+    }
+}
+
 void NinjamClientAdapter::setVideoChannel(int chidx, unsigned int fourcc) {
     if (!client) return;
     client->gsNjClient()->SetVideoChannel(chidx, fourcc);
