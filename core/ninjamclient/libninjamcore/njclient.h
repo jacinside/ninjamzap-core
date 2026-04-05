@@ -369,6 +369,7 @@ protected:
   // Audio-driven video playback state (audio thread only, no mutex needed)
   int m_video_frame_idx;      // next frame index to deliver from playing buffer
   int m_video_ready_frames;   // total frames in playing buffer
+  int m_video_expected_frames; // frame count from last complete interval (for pacing)
 };
 
 

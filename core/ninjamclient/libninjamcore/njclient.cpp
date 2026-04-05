@@ -628,6 +628,7 @@ NJClient::NJClient()
   m_video_interval_open=false;
   m_video_frame_idx=0;
   m_video_ready_frames=0;
+  m_video_expected_frames=0;
 
   waveWrite=0;
 #ifndef NJCLIENT_NO_XMIT_SUPPORT
@@ -864,8 +865,7 @@ void NJClient::AudioProc(float **inbuf, int innch, float **outbuf, int outnch, i
 
     m_interval_pos+=x;
 
-    // Video frame delivery from m_video_playing (mirrors audio's chan->ds playback).
-    // Distribute frames evenly across the interval at audio clock rate.
+    // Video frame delivery from m_video_playing — distribute frames evenly across interval.
     if (m_video_ready_frames > 0 && VideoFrameReady_Callback && m_interval_length > 0)
     {
       while (m_video_frame_idx < m_video_ready_frames)
@@ -2775,19 +2775,10 @@ void NJClient::on_new_interval()
     m_video_interval_open = false;
   }
 
-  // Video receive swap — prebuffer: take whatever has accumulated (even if END hasn't arrived).
-  // This mirrors audio's prebuffer behavior where data enters next_ds before download completes.
+  // Video receive swap — play completed download from END
   m_video_recv_cs.Enter();
   m_video_playing.reset();
-  if (m_video_accumulating.active && m_video_accumulating.data.GetSize() > 0) {
-    // Take partial/complete data from accumulating buffer
-    m_video_playing.copyFrom(m_video_accumulating);
-    // Clear data but keep active + metadata for continued accumulation
-    m_video_accumulating.data.Resize(0);
-    m_video_accumulating.frameOffsets.Resize(0);
-    m_video_accumulating.frameCount = 0;
-  } else if (m_video_next.active) {
-    // Fallback: completed download (END arrived before on_new_interval)
+  if (m_video_next.active) {
     m_video_playing.copyFrom(m_video_next);
   }
   m_video_next.reset();
