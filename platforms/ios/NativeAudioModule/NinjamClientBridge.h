@@ -148,11 +148,12 @@ void NinjamClient_stopVideoChannel(NinjamClientRef* client);
 void NinjamClient_queueVideoFrame(NinjamClientRef* client, const void* data, int32_t len);
 void NinjamClient_setVideoSPSPPS(NinjamClientRef* client, const void* data, int32_t len);
 
-// Video interval ready callback — fires from on_new_interval() at same moment as audio swap.
-// Delivers all raw data chunks accumulated during the completed interval.
-typedef void (*VideoIntervalReadyCallback)(const char* username, int32_t chidx,
-                                            uint32_t fourcc, const void* data, int32_t dataLen);
-void NinjamClient_setVideoIntervalReadyCallback(NinjamClientRef* client, VideoIntervalReadyCallback callback);
+// Video frame ready callback — called from AudioProc() to deliver individual frames
+// at audio clock rate. frameIndex 0 = SPS/PPS, 1..N = H.264 frames.
+typedef void (*VideoFrameReadyCallback)(const char* username, int32_t chidx,
+                                         uint32_t fourcc, int32_t frameIndex, int32_t totalFrames,
+                                         const void* data, int32_t dataLen);
+void NinjamClient_setVideoFrameReadyCallback(NinjamClientRef* client, VideoFrameReadyCallback callback);
 
 struct NinjamClientRef {
     void* adapter; // Changed from NJClientAdapter to NinjamClientAdapter

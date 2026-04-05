@@ -86,7 +86,7 @@ public:
     void setOnInterval(OnIntervalCallback callback);
     void setOnRawData(OnRawDataCallback callback);
     void setIntervalSwapCallback(std::function<void()> callback);
-    void setVideoIntervalReadyCallback(NJClient::VideoIntervalReadyCallback callback);
+    void setVideoFrameReadyCallback(NJClient::VideoFrameReadyCallback callback);
 
     // Raw data send
     void rawDataSendBegin(unsigned char outGuid[16], unsigned int fourcc, int chidx, int estsize);

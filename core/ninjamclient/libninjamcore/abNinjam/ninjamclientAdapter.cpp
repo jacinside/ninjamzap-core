@@ -786,10 +786,10 @@ void NinjamClientAdapter::setIntervalSwapCallback(std::function<void()> callback
     }
 }
 
-void NinjamClientAdapter::setVideoIntervalReadyCallback(NJClient::VideoIntervalReadyCallback callback) {
+void NinjamClientAdapter::setVideoFrameReadyCallback(NJClient::VideoFrameReadyCallback callback) {
     if (client && client->gsNjClient()) {
-        client->gsNjClient()->VideoIntervalReady_Callback = callback;
-        client->gsNjClient()->VideoIntervalReady_User = this;
+        client->gsNjClient()->VideoFrameReady_Callback = callback;
+        client->gsNjClient()->VideoFrameReady_User = this;
     }
 }
 

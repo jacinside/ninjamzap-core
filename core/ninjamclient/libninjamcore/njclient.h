@@ -219,13 +219,14 @@ public:
   IntervalSwapCallback IntervalSwap_Callback;
   void *IntervalSwap_User;
 
-  // Called when a complete video interval is ready for playback (same moment as audio swap).
-  // Delivers all raw data chunks accumulated during the previous interval.
-  // userData, username, chidx, fourcc, data (all chunks concatenated), dataLen
-  typedef void (*VideoIntervalReadyCallback)(void *userData, const char *username, int chidx,
-                                              unsigned int fourcc, const void *data, int dataLen);
-  VideoIntervalReadyCallback VideoIntervalReady_Callback;
-  void *VideoIntervalReady_User;
+  // Called from AudioProc() to deliver individual video frames at audio clock rate.
+  // Each call delivers one raw H.264 chunk (or SPS/PPS for frameIndex==0).
+  // userData, username, chidx, fourcc, frameIndex, frameCount, data, dataLen
+  typedef void (*VideoFrameReadyCallback)(void *userData, const char *username, int chidx,
+                                           unsigned int fourcc, int frameIndex, int totalFrames,
+                                           const void *data, int dataLen);
+  VideoFrameReadyCallback VideoFrameReady_Callback;
+  void *VideoFrameReady_User;
 
   // Video channel management — interval BEGIN/END driven from on_new_interval()
   void SetVideoChannel(int chidx, unsigned int fourcc);
@@ -336,21 +337,38 @@ protected:
   WDL_HeapBuf m_video_spspps;
   WDL_Mutex m_video_spspps_cs;
 
-  // Video receive double-buffer — mirrors audio's next_ds[0]/next_ds[1] pattern.
-  // Raw data accumulates in m_video_recv_current during the interval,
-  // then swaps to m_video_recv_ready in on_new_interval() (same moment as audio swap).
+  // Video receive pipeline — mirrors audio's next_ds[0]/next_ds[1] exactly.
+  // Data accumulates in m_video_accumulating during download (BEGIN→WRITE→END).
+  // On END, completed buffer moves to m_video_next[slot] (like audio's startPlaying→next_ds).
+  // On on_new_interval, m_video_playing = next[0]; next[0] = next[1]; next[1] = empty.
   struct VideoRecvBuffer {
     WDL_HeapBuf data;
+    WDL_TypedBuf<int> frameOffsets; // byte offset of each chunk in data
+    int frameCount;
     char username[256];
     unsigned int fourcc;
     int chidx;
     bool active;
-    VideoRecvBuffer() : fourcc(0), chidx(0), active(false) { username[0] = 0; }
-    void reset() { data.Resize(0); fourcc = 0; chidx = 0; active = false; username[0] = 0; }
+    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), active(false) { username[0] = 0; }
+    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; active = false; username[0] = 0; }
+    void copyFrom(const VideoRecvBuffer &src) {
+      fourcc = src.fourcc; chidx = src.chidx; active = src.active; frameCount = src.frameCount;
+      memcpy(username, src.username, sizeof(username));
+      int sz = src.data.GetSize();
+      data.Resize(sz, false);
+      if (sz > 0) memcpy(data.Get(), src.data.Get(), sz);
+      frameOffsets.Resize(src.frameCount, false);
+      if (src.frameCount > 0) memcpy(frameOffsets.Get(), src.frameOffsets.Get(), src.frameCount * sizeof(int));
+    }
   };
-  VideoRecvBuffer m_video_recv_current;  // accumulating during current interval
-  VideoRecvBuffer m_video_recv_ready;    // complete, ready for playback after swap
+  VideoRecvBuffer m_video_accumulating; // current download in progress (BEGIN→WRITE→END)
+  VideoRecvBuffer m_video_next;         // completed download, waiting for on_new_interval swap
+  VideoRecvBuffer m_video_playing;      // currently delivering in AudioProc
   WDL_Mutex m_video_recv_cs;
+
+  // Audio-driven video playback state (audio thread only, no mutex needed)
+  int m_video_frame_idx;      // next frame index to deliver from playing buffer
+  int m_video_ready_frames;   // total frames in playing buffer
 };
 
 

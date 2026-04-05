@@ -773,16 +773,19 @@ void NinjamClient_setIntervalSwapCallback(NinjamClientRef* client, IntervalSwapC
     }
 }
 
-static VideoIntervalReadyCallback g_videoIntervalReadyCallback = nullptr;
+static VideoFrameReadyCallback g_videoFrameReadyCallback = nullptr;
 
-void NinjamClient_setVideoIntervalReadyCallback(NinjamClientRef* client, VideoIntervalReadyCallback callback) {
-    g_videoIntervalReadyCallback = callback;
+void NinjamClient_setVideoFrameReadyCallback(NinjamClientRef* client, VideoFrameReadyCallback callback) {
+    g_videoFrameReadyCallback = callback;
     auto adapter = getAdapter(client);
     if (adapter) {
-        adapter->setVideoIntervalReadyCallback([](void* /*userData*/, const char* username, int chidx,
-                                                   unsigned int fourcc, const void* data, int dataLen) {
-            if (g_videoIntervalReadyCallback)
-                g_videoIntervalReadyCallback(username, chidx, fourcc, data, dataLen);
+        adapter->setVideoFrameReadyCallback([](void* /*userData*/, const char* username, int chidx,
+                                                unsigned int fourcc, int frameIndex, int totalFrames,
+                                                const void* data, int dataLen) {
+            if (g_videoFrameReadyCallback)
+                g_videoFrameReadyCallback(username, chidx, fourcc,
+                                          static_cast<int32_t>(frameIndex), static_cast<int32_t>(totalFrames),
+                                          data, dataLen);
         });
     }
 }
