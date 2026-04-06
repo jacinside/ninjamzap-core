@@ -1408,7 +1408,8 @@ int NJClient::Run() // nonzero if sleep ok
                         memset(m_video_append_guid, 0, 16);
                       } else {
                         // Normal path: download completed before swap
-                        if (m_video_accumulating.frameCount > 0) {
+                        // Skip SPS/PPS-only intervals (frameCount <= 1)
+                        if (m_video_accumulating.frameCount > 1) {
                           m_video_expected_frames = m_video_accumulating.frameCount;
                           m_video_next.reset();
                           m_video_next.copyFrom(m_video_accumulating);
@@ -1916,17 +1917,21 @@ void NJClient::SetVideoChannel(int chidx, unsigned int fourcc)
   m_video_fourcc = fourcc;
   m_video_active = true;
 
-  // If mid-interval and not already open, begin immediately
-  // so frames don't have to wait for the next on_new_interval().
-  // Fixes: re-enabling video transmit caused 0-1 interval delay.
+
+  // If mid-interval and SPS/PPS is already cached, begin immediately.
+  // If SPS/PPS not ready (camera just started), let on_new_interval handle it —
+  // sending BEGIN without SPS/PPS causes receiver to fail decoder init (black screen).
   if (!m_video_interval_open && m_interval_pos > 0) {
-    RawDataSendBegin(m_video_guid, m_video_fourcc, m_video_chidx, 0);
-    m_video_interval_open = true;
-    // Send cached SPS/PPS so receiver can init decoder
     m_video_spspps_cs.Enter();
-    if (m_video_spspps.GetSize() > 0)
-      RawDataSendWrite(m_video_guid, m_video_spspps.Get(), m_video_spspps.GetSize(), false);
+    bool hasSPSPPS = m_video_spspps.GetSize() > 0;
     m_video_spspps_cs.Leave();
+    if (hasSPSPPS) {
+      RawDataSendBegin(m_video_guid, m_video_fourcc, m_video_chidx, 0);
+      m_video_interval_open = true;
+      m_video_spspps_cs.Enter();
+      RawDataSendWrite(m_video_guid, m_video_spspps.Get(), m_video_spspps.GetSize(), false);
+      m_video_spspps_cs.Leave();
+    }
   }
 }
 
@@ -2827,12 +2832,13 @@ void NJClient::on_new_interval()
   m_video_append_to_next = false;
   memset(m_video_append_guid, 0, 16);
 
-  if (m_video_next.active) {
+  if (m_video_next.active && m_video_next.frameCount > 1) {
     // Steady state: play staged data from next (2-swap, like audio next_ds[0] occupied)
+    // frameCount > 1 skips SPS/PPS-only intervals (1 frame = just decoder init, no real video)
     m_video_playing.copyFrom(m_video_next);
     m_video_next.reset();
     // Stage accumulating into next for the following swap
-    if (m_video_accumulating.active && m_video_accumulating.frameCount > 0) {
+    if (m_video_accumulating.active && m_video_accumulating.frameCount > 1) {
       m_video_next.copyFrom(m_video_accumulating);
       memcpy(m_video_append_guid, m_video_accumulating.guid, 16);
       m_video_append_active = true;
@@ -2841,7 +2847,7 @@ void NJClient::on_new_interval()
       m_video_accumulating.frameOffsets.Resize(0);
       m_video_accumulating.frameCount = 0;
     }
-  } else if (m_video_accumulating.active && m_video_accumulating.frameCount > 0) {
+  } else if (m_video_accumulating.active && m_video_accumulating.frameCount > 1) {
     // First data / after gap: play directly (1-swap, like audio next_ds[0] free)
     m_video_playing.copyFrom(m_video_accumulating);
     memcpy(m_video_append_guid, m_video_accumulating.guid, 16);
