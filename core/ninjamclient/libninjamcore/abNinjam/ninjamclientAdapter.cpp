@@ -648,6 +648,13 @@ const char* NinjamClientAdapter::getLocalUserName() {
     return "";
 }
 
+bool NinjamClientAdapter::isServerVideoSupported() {
+    if (connected && client) {
+        return client->gsNjClient()->GetServerVideoSupported();
+    }
+    return false;
+}
+
 // Implementation of syncWithServerClock
 void NinjamClientAdapter::syncWithServerClock() {
     if (!connected || !client) return;

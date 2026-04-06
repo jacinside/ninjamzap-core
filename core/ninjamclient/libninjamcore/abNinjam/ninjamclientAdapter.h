@@ -134,7 +134,8 @@ public:
     std::string getServerStatus();
     std::string getErrorString();
     const char* getLocalUserName();
-  
+    bool isServerVideoSupported();
+
     // Metronome playback
     void playMetronomeTick(bool isDownbeat);
   

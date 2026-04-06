@@ -657,6 +657,7 @@ void NJClient::_reinit()
   output_peaklevel[0]=output_peaklevel[1]=0.0;
 
   m_connection_keepalive=0;
+  m_server_video_supported=false;
   m_status=-1;
 
   m_in_auth=0;
@@ -1091,6 +1092,7 @@ int NJClient::Run() // nonzero if sleep ok
               repl.client_version=PROTO_VER_CUR; // client version number
 
               m_connection_keepalive=(cha.server_caps>>8)&0xff;
+              m_server_video_supported=(cha.server_caps&2)!=0;
 
 //              printf("Got keepalive of %d\n",m_connection_keepalive);
 

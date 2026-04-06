@@ -133,6 +133,7 @@ public:
 
   char *GetUser() { return m_user.Get(); }
   char *GetHostName() { return m_host.Get(); }
+  bool GetServerVideoSupported() { return m_server_video_supported; }
 
   float GetActualBPM() { return (float) m_active_bpm; }
   int GetBPI() { return m_active_bpi; }
@@ -263,6 +264,7 @@ protected:
   int m_status;
   int m_max_localch;
   int m_connection_keepalive;
+  bool m_server_video_supported; // server advertised video capability (bit 1 of server_caps)
   FILE *m_logFile;
 #ifndef NJCLIENT_NO_XMIT_SUPPORT
   FILE *m_oggWrite;
