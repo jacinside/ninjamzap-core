@@ -2779,11 +2779,6 @@ void NJClient::on_new_interval()
 
       if (!(chan->flags&2) && !(chan->flags&4))
       {
-/*        if (ch<2)
-        {
-          OutputDebugString("advanced to next_ds (intervalpoo)\n");
-        }
-        */
         chan->dump_samples=0;
         overlapFadeState fade_state;
         if (chan->ds) chan->ds->calcOverlap(&fade_state);
@@ -2793,7 +2788,7 @@ void NJClient::on_new_interval()
         else delete chan->next_ds[0];
         chan->next_ds[0]=chan->next_ds[1]; // advance queue
         chan->next_ds[1]=0;
-        
+
         if (chan->ds)
         {
           chan->ds->applyOverlap(&fade_state);
@@ -2822,10 +2817,7 @@ void NJClient::on_new_interval()
     m_video_interval_open = false;
   }
 
-  // Video receive swap — mirrors audio's next_ds variable delay:
-  //   If next has data: playing = next (2-swap steady state, like audio next_ds[0] occupied)
-  //   If next empty but accumulating has data: playing = accumulating (1-swap, like audio next_ds[0] free)
-  //   Prebuffer remaining accumulating into next for the following swap.
+  // Video receive swap — prebuffer from accumulating with expected-FPS pacing.
   m_video_recv_cs.Enter();
   m_video_playing.reset();
   m_video_append_active = false;
@@ -2833,8 +2825,7 @@ void NJClient::on_new_interval()
   memset(m_video_append_guid, 0, 16);
 
   if (m_video_next.active && m_video_next.frameCount > 1) {
-    // Steady state: play staged data from next (2-swap, like audio next_ds[0] occupied)
-    // frameCount > 1 skips SPS/PPS-only intervals (1 frame = just decoder init, no real video)
+    // Steady state: play staged data from next
     m_video_playing.copyFrom(m_video_next);
     m_video_next.reset();
     // Stage accumulating into next for the following swap
@@ -2842,17 +2833,18 @@ void NJClient::on_new_interval()
       m_video_next.copyFrom(m_video_accumulating);
       memcpy(m_video_append_guid, m_video_accumulating.guid, 16);
       m_video_append_active = true;
-      m_video_append_to_next = true;  // late WRITEs → next
+      m_video_append_to_next = true;
       m_video_accumulating.data.Resize(0);
       m_video_accumulating.frameOffsets.Resize(0);
       m_video_accumulating.frameCount = 0;
     }
   } else if (m_video_accumulating.active && m_video_accumulating.frameCount > 1) {
-    // First data / after gap: play directly (1-swap, like audio next_ds[0] free)
+    // First data / after gap: play from accumulating directly (1-swap)
+    m_video_next.reset();
     m_video_playing.copyFrom(m_video_accumulating);
     memcpy(m_video_append_guid, m_video_accumulating.guid, 16);
     m_video_append_active = true;
-    m_video_append_to_next = false;  // late WRITEs → playing (needs mutex in AudioProc)
+    m_video_append_to_next = false;
     m_video_accumulating.data.Resize(0);
     m_video_accumulating.frameOffsets.Resize(0);
     m_video_accumulating.frameCount = 0;
