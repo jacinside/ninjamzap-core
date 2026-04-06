@@ -337,23 +337,25 @@ protected:
   WDL_HeapBuf m_video_spspps;
   WDL_Mutex m_video_spspps_cs;
 
-  // Video receive pipeline — mirrors audio's next_ds[0]/next_ds[1] exactly.
+  // Video receive pipeline — prebuffer + dynamic append for sync with audio.
   // Data accumulates in m_video_accumulating during download (BEGIN→WRITE→END).
-  // On END, completed buffer moves to m_video_next[slot] (like audio's startPlaying→next_ds).
-  // On on_new_interval, m_video_playing = next[0]; next[0] = next[1]; next[1] = empty.
+  // on_new_interval prebuffers from accumulating; late WRITEs append to playing via GUID match.
+  // AudioProc delivers frames paced by expected_frames (from previous complete interval).
   struct VideoRecvBuffer {
     WDL_HeapBuf data;
     WDL_TypedBuf<int> frameOffsets; // byte offset of each chunk in data
     int frameCount;
     char username[256];
+    unsigned char guid[16];         // download GUID for routing late WRITEs
     unsigned int fourcc;
     int chidx;
     bool active;
-    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), active(false) { username[0] = 0; }
-    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; active = false; username[0] = 0; }
+    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), active(false) { username[0] = 0; memset(guid, 0, 16); }
+    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; active = false; username[0] = 0; memset(guid, 0, 16); }
     void copyFrom(const VideoRecvBuffer &src) {
       fourcc = src.fourcc; chidx = src.chidx; active = src.active; frameCount = src.frameCount;
       memcpy(username, src.username, sizeof(username));
+      memcpy(guid, src.guid, 16);
       int sz = src.data.GetSize();
       data.Resize(sz, false);
       if (sz > 0) memcpy(data.Get(), src.data.Get(), sz);
@@ -366,10 +368,12 @@ protected:
   VideoRecvBuffer m_video_playing;      // currently delivering in AudioProc
   WDL_Mutex m_video_recv_cs;
 
-  // Audio-driven video playback state (audio thread only, no mutex needed)
-  int m_video_frame_idx;      // next frame index to deliver from playing buffer
-  int m_video_ready_frames;   // total frames in playing buffer
-  int m_video_expected_frames; // frame count from last complete interval (for pacing)
+  // Video playback state
+  int m_video_frame_idx;                // next frame index to deliver from playing buffer
+  int m_video_expected_frames;          // frame count from last complete interval (for pacing)
+  bool m_video_append_active;           // late WRITEs go to the append target buffer
+  bool m_video_append_to_next;          // true: append to next (2-swap), false: append to playing (1-swap)
+  unsigned char m_video_append_guid[16]; // GUID of download being appended
 };
 
 

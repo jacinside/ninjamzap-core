@@ -627,8 +627,10 @@ NJClient::NJClient()
   memset(m_video_guid,0,16);
   m_video_interval_open=false;
   m_video_frame_idx=0;
-  m_video_ready_frames=0;
   m_video_expected_frames=0;
+  m_video_append_active=false;
+  m_video_append_to_next=false;
+  memset(m_video_append_guid,0,16);
 
   waveWrite=0;
 #ifndef NJCLIENT_NO_XMIT_SUPPORT
@@ -865,31 +867,43 @@ void NJClient::AudioProc(float **inbuf, int innch, float **outbuf, int outnch, i
 
     m_interval_pos+=x;
 
-    // Video frame delivery from m_video_playing — distribute frames evenly across interval.
-    if (m_video_ready_frames > 0 && VideoFrameReady_Callback && m_interval_length > 0)
+    // Video frame delivery — expected-FPS pacing.
+    // Mutex needed when dynamic append targets playing (1-swap path).
+    if (VideoFrameReady_Callback && m_interval_length > 0)
     {
-      while (m_video_frame_idx < m_video_ready_frames)
+      bool needMutex = m_video_append_active && !m_video_append_to_next;
+      if (needMutex) m_video_recv_cs.Enter();
+
+      int readyFrames = m_video_playing.active ? m_video_playing.frameCount : 0;
+      int expected = m_video_expected_frames > 0 ? m_video_expected_frames : readyFrames;
+
+      if (readyFrames > 0 && expected > 0)
       {
-        int threshold = (int)((int64_t)m_video_frame_idx * m_interval_length / m_video_ready_frames);
-        if (m_interval_pos >= threshold)
+        while (m_video_frame_idx < readyFrames)
         {
-          int offset = m_video_playing.frameOffsets.Get()[m_video_frame_idx];
-          int dataStart = offset + 4; // skip 4-byte big-endian length prefix
-          int nextOffset = (m_video_frame_idx + 1 < m_video_ready_frames)
-            ? m_video_playing.frameOffsets.Get()[m_video_frame_idx + 1]
-            : m_video_playing.data.GetSize();
-          int frameLen = nextOffset - dataStart;
-          if (frameLen > 0 && dataStart < m_video_playing.data.GetSize())
+          int threshold = (int)((int64_t)m_video_frame_idx * m_interval_length / expected);
+          if (m_interval_pos >= threshold)
           {
-            VideoFrameReady_Callback(VideoFrameReady_User,
-              m_video_playing.username, m_video_playing.chidx,
-              m_video_playing.fourcc, m_video_frame_idx, m_video_ready_frames,
-              (char*)m_video_playing.data.Get() + dataStart, frameLen);
+            int offset = m_video_playing.frameOffsets.Get()[m_video_frame_idx];
+            int dataStart = offset + 4; // skip 4-byte big-endian length prefix
+            int nextOffset = (m_video_frame_idx + 1 < readyFrames)
+              ? m_video_playing.frameOffsets.Get()[m_video_frame_idx + 1]
+              : m_video_playing.data.GetSize();
+            int frameLen = nextOffset - dataStart;
+            if (frameLen > 0 && dataStart < m_video_playing.data.GetSize())
+            {
+              VideoFrameReady_Callback(VideoFrameReady_User,
+                m_video_playing.username, m_video_playing.chidx,
+                m_video_playing.fourcc, m_video_frame_idx, expected,
+                (char*)m_video_playing.data.Get() + dataStart, frameLen);
+            }
+            m_video_frame_idx++;
           }
-          m_video_frame_idx++;
+          else break;
         }
-        else break;
       }
+
+      if (needMutex) m_video_recv_cs.Leave();
     }
 
     offs += x;
@@ -1300,10 +1314,18 @@ int NJClient::Run() // nonzero if sleep ok
 
                   // Reset accumulation buffer for this new download
                   m_video_recv_cs.Enter();
+                  // Stop appending if still active (previous download didn't get END)
+                  if (m_video_append_active) {
+                    VideoRecvBuffer &target = m_video_append_to_next ? m_video_next : m_video_playing;
+                    m_video_expected_frames = target.frameCount;
+                    m_video_append_active = false;
+                    memset(m_video_append_guid, 0, 16);
+                  }
                   m_video_accumulating.reset();
                   m_video_accumulating.fourcc = dib.fourcc;
                   m_video_accumulating.chidx = dib.chidx;
                   lstrcpyn_safe(m_video_accumulating.username, dib.username, sizeof(m_video_accumulating.username));
+                  memcpy(m_video_accumulating.guid, dib.guid, 16);
                   m_video_accumulating.active = true;
                   m_video_recv_cs.Leave();
 
@@ -1353,26 +1375,46 @@ int NJClient::Run() // nonzero if sleep ok
                   RawDataDownloadTracker *tracker = m_rawdata_downloads.Get(ri);
                   if (tracker && !memcmp(tracker->guid, diw.guid, 16))
                   {
-                    // Accumulate into temp buffer
+                    // Accumulate video frame — route to next (dynamic append) or accumulating
                     if (diw.audio_data_len > 0 && diw.audio_data)
                     {
                       m_video_recv_cs.Enter();
-                      int curSize = m_video_accumulating.data.GetSize();
-                      int fc = m_video_accumulating.frameCount;
-                      m_video_accumulating.frameOffsets.Resize(fc + 1, false);
-                      m_video_accumulating.frameOffsets.Get()[fc] = curSize;
-                      m_video_accumulating.frameCount++;
-                      m_video_accumulating.data.Resize(curSize + diw.audio_data_len, false);
-                      memcpy((char*)m_video_accumulating.data.Get() + curSize,
+                      // Route late WRITEs to the append target if GUID matches prebuffered download
+                      bool appending = m_video_append_active &&
+                                       !memcmp(m_video_append_guid, diw.guid, 16);
+                      VideoRecvBuffer &target = appending
+                        ? (m_video_append_to_next ? m_video_next : m_video_playing)
+                        : m_video_accumulating;
+                      int curSize = target.data.GetSize();
+                      int fc = target.frameCount;
+                      target.frameOffsets.Resize(fc + 1, false);
+                      target.frameOffsets.Get()[fc] = curSize;
+                      target.frameCount++;
+                      target.data.Resize(curSize + diw.audio_data_len, false);
+                      memcpy((char*)target.data.Get() + curSize,
                              diw.audio_data, diw.audio_data_len);
                       m_video_recv_cs.Leave();
                     }
-                    if (diw.flags & 1) // end — move to next slot
+                    if (diw.flags & 1) // end
                     {
                       m_video_recv_cs.Enter();
-                      m_video_next.reset();
-                      m_video_next.copyFrom(m_video_accumulating);
-                      m_video_accumulating.reset();
+                      bool wasAppending = m_video_append_active &&
+                                          !memcmp(m_video_append_guid, diw.guid, 16);
+                      if (wasAppending) {
+                        // All frames now in target. Record total for pacing.
+                        VideoRecvBuffer &target = m_video_append_to_next ? m_video_next : m_video_playing;
+                        m_video_expected_frames = target.frameCount;
+                        m_video_append_active = false;
+                        memset(m_video_append_guid, 0, 16);
+                      } else {
+                        // Normal path: download completed before swap
+                        if (m_video_accumulating.frameCount > 0) {
+                          m_video_expected_frames = m_video_accumulating.frameCount;
+                          m_video_next.reset();
+                          m_video_next.copyFrom(m_video_accumulating);
+                        }
+                        m_video_accumulating.reset();
+                      }
                       m_video_recv_cs.Leave();
                       delete tracker;
                       m_rawdata_downloads.Delete(ri);
@@ -2775,18 +2817,43 @@ void NJClient::on_new_interval()
     m_video_interval_open = false;
   }
 
-  // Video receive swap — play completed download from END
+  // Video receive swap — mirrors audio's next_ds variable delay:
+  //   If next has data: playing = next (2-swap steady state, like audio next_ds[0] occupied)
+  //   If next empty but accumulating has data: playing = accumulating (1-swap, like audio next_ds[0] free)
+  //   Prebuffer remaining accumulating into next for the following swap.
   m_video_recv_cs.Enter();
   m_video_playing.reset();
-  if (m_video_next.active) {
-    m_video_playing.copyFrom(m_video_next);
-  }
-  m_video_next.reset();
-  m_video_recv_cs.Leave();
+  m_video_append_active = false;
+  m_video_append_to_next = false;
+  memset(m_video_append_guid, 0, 16);
 
-  // Set up audio-driven playback counters (audio thread only)
+  if (m_video_next.active) {
+    // Steady state: play staged data from next (2-swap, like audio next_ds[0] occupied)
+    m_video_playing.copyFrom(m_video_next);
+    m_video_next.reset();
+    // Stage accumulating into next for the following swap
+    if (m_video_accumulating.active && m_video_accumulating.frameCount > 0) {
+      m_video_next.copyFrom(m_video_accumulating);
+      memcpy(m_video_append_guid, m_video_accumulating.guid, 16);
+      m_video_append_active = true;
+      m_video_append_to_next = true;  // late WRITEs → next
+      m_video_accumulating.data.Resize(0);
+      m_video_accumulating.frameOffsets.Resize(0);
+      m_video_accumulating.frameCount = 0;
+    }
+  } else if (m_video_accumulating.active && m_video_accumulating.frameCount > 0) {
+    // First data / after gap: play directly (1-swap, like audio next_ds[0] free)
+    m_video_playing.copyFrom(m_video_accumulating);
+    memcpy(m_video_append_guid, m_video_accumulating.guid, 16);
+    m_video_append_active = true;
+    m_video_append_to_next = false;  // late WRITEs → playing (needs mutex in AudioProc)
+    m_video_accumulating.data.Resize(0);
+    m_video_accumulating.frameOffsets.Resize(0);
+    m_video_accumulating.frameCount = 0;
+  }
+
   m_video_frame_idx = 0;
-  m_video_ready_frames = m_video_playing.active ? m_video_playing.frameCount : 0;
+  m_video_recv_cs.Leave();
 
   // Notify that audio interval just swapped
   if (IntervalSwap_Callback) {
