@@ -626,11 +626,6 @@ NJClient::NJClient()
   m_video_chidx=0;
   memset(m_video_guid,0,16);
   m_video_interval_open=false;
-  m_video_frame_idx=0;
-  m_video_expected_frames=0;
-  m_video_append_active=false;
-  m_video_append_to_next=false;
-  memset(m_video_append_guid,0,16);
 
   waveWrite=0;
 #ifndef NJCLIENT_NO_XMIT_SUPPORT
@@ -868,39 +863,48 @@ void NJClient::AudioProc(float **inbuf, int innch, float **outbuf, int outnch, i
 
     m_interval_pos+=x;
 
-    // Video frame delivery — expected-FPS pacing.
-    // Mutex needed when dynamic append targets playing (1-swap path).
+    // Video frame delivery — per-user, expected-FPS pacing.
     if (VideoFrameReady_Callback && m_interval_length > 0)
     {
-      bool needMutex = m_video_append_active && !m_video_append_to_next;
+      bool needMutex = false;
+      for (int vi = 0; vi < m_video_streams.GetSize(); vi++) {
+        VideoRecvState *vs = m_video_streams.Get(vi);
+        if (vs && vs->append_active && !vs->append_to_next) { needMutex = true; break; }
+      }
       if (needMutex) m_video_recv_cs.Enter();
 
-      int readyFrames = m_video_playing.active ? m_video_playing.frameCount : 0;
-      int expected = m_video_expected_frames > 0 ? m_video_expected_frames : readyFrames;
-
-      if (readyFrames > 0 && expected > 0)
+      for (int vi = 0; vi < m_video_streams.GetSize(); vi++)
       {
-        while (m_video_frame_idx < readyFrames)
+        VideoRecvState *vs = m_video_streams.Get(vi);
+        if (!vs) continue;
+
+        int readyFrames = vs->playing.active ? vs->playing.frameCount : 0;
+        int expected = vs->expected_frames > 0 ? vs->expected_frames : readyFrames;
+
+        if (readyFrames > 0 && expected > 0)
         {
-          int threshold = (int)((int64_t)m_video_frame_idx * m_interval_length / expected);
-          if (m_interval_pos >= threshold)
+          while (vs->frame_idx < readyFrames)
           {
-            int offset = m_video_playing.frameOffsets.Get()[m_video_frame_idx];
-            int dataStart = offset + 4; // skip 4-byte big-endian length prefix
-            int nextOffset = (m_video_frame_idx + 1 < readyFrames)
-              ? m_video_playing.frameOffsets.Get()[m_video_frame_idx + 1]
-              : m_video_playing.data.GetSize();
-            int frameLen = nextOffset - dataStart;
-            if (frameLen > 0 && dataStart < m_video_playing.data.GetSize())
+            int threshold = (int)((int64_t)vs->frame_idx * m_interval_length / expected);
+            if (m_interval_pos >= threshold)
             {
-              VideoFrameReady_Callback(VideoFrameReady_User,
-                m_video_playing.username, m_video_playing.chidx,
-                m_video_playing.fourcc, m_video_frame_idx, expected,
-                (char*)m_video_playing.data.Get() + dataStart, frameLen);
+              int offset = vs->playing.frameOffsets.Get()[vs->frame_idx];
+              int dataStart = offset + 4;
+              int nextOffset = (vs->frame_idx + 1 < readyFrames)
+                ? vs->playing.frameOffsets.Get()[vs->frame_idx + 1]
+                : vs->playing.data.GetSize();
+              int frameLen = nextOffset - dataStart;
+              if (frameLen > 0 && dataStart < vs->playing.data.GetSize())
+              {
+                VideoFrameReady_Callback(VideoFrameReady_User,
+                  vs->playing.username, vs->playing.chidx,
+                  vs->playing.fourcc, vs->frame_idx, expected,
+                  (char*)vs->playing.data.Get() + dataStart, frameLen);
+              }
+              vs->frame_idx++;
             }
-            m_video_frame_idx++;
+            else break;
           }
-          else break;
         }
       }
 
@@ -1314,21 +1318,22 @@ int NJClient::Run() // nonzero if sleep ok
                   tracker->chidx = dib.chidx;
                   m_rawdata_downloads.Add(tracker);
 
-                  // Reset accumulation buffer for this new download
+                  // Find or create per-user video stream state
                   m_video_recv_cs.Enter();
+                  VideoRecvState *vs = findOrCreateVideoStream(dib.username, dib.chidx);
                   // Stop appending if still active (previous download didn't get END)
-                  if (m_video_append_active) {
-                    VideoRecvBuffer &target = m_video_append_to_next ? m_video_next : m_video_playing;
-                    m_video_expected_frames = target.frameCount;
-                    m_video_append_active = false;
-                    memset(m_video_append_guid, 0, 16);
+                  if (vs->append_active) {
+                    VideoRecvBuffer &target = vs->append_to_next ? vs->next : vs->playing;
+                    vs->expected_frames = target.frameCount;
+                    vs->append_active = false;
+                    memset(vs->append_guid, 0, 16);
                   }
-                  m_video_accumulating.reset();
-                  m_video_accumulating.fourcc = dib.fourcc;
-                  m_video_accumulating.chidx = dib.chidx;
-                  lstrcpyn_safe(m_video_accumulating.username, dib.username, sizeof(m_video_accumulating.username));
-                  memcpy(m_video_accumulating.guid, dib.guid, 16);
-                  m_video_accumulating.active = true;
+                  vs->accumulating.reset();
+                  vs->accumulating.fourcc = dib.fourcc;
+                  vs->accumulating.chidx = dib.chidx;
+                  lstrcpyn_safe(vs->accumulating.username, dib.username, sizeof(vs->accumulating.username));
+                  memcpy(vs->accumulating.guid, dib.guid, 16);
+                  vs->accumulating.active = true;
                   m_video_recv_cs.Leave();
 
                   if (RawData_Callback)
@@ -1377,16 +1382,17 @@ int NJClient::Run() // nonzero if sleep ok
                   RawDataDownloadTracker *tracker = m_rawdata_downloads.Get(ri);
                   if (tracker && !memcmp(tracker->guid, diw.guid, 16))
                   {
-                    // Accumulate video frame — route to next (dynamic append) or accumulating
+                    // Accumulate video frame into per-user stream state
                     if (diw.audio_data_len > 0 && diw.audio_data)
                     {
                       m_video_recv_cs.Enter();
-                      // Route late WRITEs to the append target if GUID matches prebuffered download
-                      bool appending = m_video_append_active &&
-                                       !memcmp(m_video_append_guid, diw.guid, 16);
+                      VideoRecvState *vs = findVideoStreamByGUID(diw.guid);
+                      if (!vs) vs = findOrCreateVideoStream(tracker->username, tracker->chidx);
+                      bool appending = vs->append_active &&
+                                       !memcmp(vs->append_guid, diw.guid, 16);
                       VideoRecvBuffer &target = appending
-                        ? (m_video_append_to_next ? m_video_next : m_video_playing)
-                        : m_video_accumulating;
+                        ? (vs->append_to_next ? vs->next : vs->playing)
+                        : vs->accumulating;
                       int curSize = target.data.GetSize();
                       int fc = target.frameCount;
                       target.frameOffsets.Resize(fc + 1, false);
@@ -1400,23 +1406,23 @@ int NJClient::Run() // nonzero if sleep ok
                     if (diw.flags & 1) // end
                     {
                       m_video_recv_cs.Enter();
-                      bool wasAppending = m_video_append_active &&
-                                          !memcmp(m_video_append_guid, diw.guid, 16);
-                      if (wasAppending) {
-                        // All frames now in target. Record total for pacing.
-                        VideoRecvBuffer &target = m_video_append_to_next ? m_video_next : m_video_playing;
-                        m_video_expected_frames = target.frameCount;
-                        m_video_append_active = false;
-                        memset(m_video_append_guid, 0, 16);
-                      } else {
-                        // Normal path: download completed before swap
-                        // Skip SPS/PPS-only intervals (frameCount <= 1)
-                        if (m_video_accumulating.frameCount > 1) {
-                          m_video_expected_frames = m_video_accumulating.frameCount;
-                          m_video_next.reset();
-                          m_video_next.copyFrom(m_video_accumulating);
+                      VideoRecvState *vs = findVideoStreamByGUID(diw.guid);
+                      if (vs) {
+                        bool wasAppending = vs->append_active &&
+                                            !memcmp(vs->append_guid, diw.guid, 16);
+                        if (wasAppending) {
+                          VideoRecvBuffer &target = vs->append_to_next ? vs->next : vs->playing;
+                          vs->expected_frames = target.frameCount;
+                          vs->append_active = false;
+                          memset(vs->append_guid, 0, 16);
+                        } else {
+                          if (vs->accumulating.frameCount > 1) {
+                            vs->expected_frames = vs->accumulating.frameCount;
+                            vs->next.reset();
+                            vs->next.copyFrom(vs->accumulating);
+                          }
+                          vs->accumulating.reset();
                         }
-                        m_video_accumulating.reset();
                       }
                       m_video_recv_cs.Leave();
                       delete tracker;
@@ -1950,6 +1956,54 @@ void NJClient::QueueVideoFrame(const void *data, int len)
   if (!m_video_active || !m_video_interval_open) return;
   if (data && len > 0)
     RawDataSendWrite(m_video_guid, data, len, false);
+}
+
+// Per-user video stream helpers
+NJClient::VideoRecvState *NJClient::findVideoStream(const char *username, int chidx)
+{
+  for (int i = 0; i < m_video_streams.GetSize(); i++) {
+    VideoRecvState *vs = m_video_streams.Get(i);
+    if (vs && vs->accumulating.chidx == chidx && !strcmp(vs->accumulating.username, username))
+      return vs;
+  }
+  return NULL;
+}
+
+NJClient::VideoRecvState *NJClient::findOrCreateVideoStream(const char *username, int chidx)
+{
+  VideoRecvState *vs = findVideoStream(username, chidx);
+  if (!vs) {
+    vs = new VideoRecvState;
+    snprintf(vs->key, sizeof(vs->key), "%s:%d", username, chidx);
+    lstrcpyn_safe(vs->accumulating.username, username, sizeof(vs->accumulating.username));
+    vs->accumulating.chidx = chidx;
+    m_video_streams.Add(vs);
+  }
+  return vs;
+}
+
+NJClient::VideoRecvState *NJClient::findVideoStreamByGUID(const unsigned char *guid)
+{
+  for (int i = 0; i < m_video_streams.GetSize(); i++) {
+    VideoRecvState *vs = m_video_streams.Get(i);
+    if (vs) {
+      if (!memcmp(vs->accumulating.guid, guid, 16)) return vs;
+      if (vs->append_active && !memcmp(vs->append_guid, guid, 16)) return vs;
+    }
+  }
+  return NULL;
+}
+
+void NJClient::removeVideoStream(const char *username, int chidx)
+{
+  for (int i = 0; i < m_video_streams.GetSize(); i++) {
+    VideoRecvState *vs = m_video_streams.Get(i);
+    if (vs && vs->accumulating.chidx == chidx && !strcmp(vs->accumulating.username, username)) {
+      delete vs;
+      m_video_streams.Delete(i);
+      return;
+    }
+  }
 }
 
 void NJClient::SetVideoSPSPPS(const void *data, int len)
@@ -2819,40 +2873,42 @@ void NJClient::on_new_interval()
     m_video_interval_open = false;
   }
 
-  // Video receive swap — prebuffer from accumulating with expected-FPS pacing.
+  // Video receive swap — per-user prebuffer from accumulating with expected-FPS pacing.
   m_video_recv_cs.Enter();
-  m_video_playing.reset();
-  m_video_append_active = false;
-  m_video_append_to_next = false;
-  memset(m_video_append_guid, 0, 16);
+  for (int vi = 0; vi < m_video_streams.GetSize(); vi++) {
+    VideoRecvState *vs = m_video_streams.Get(vi);
+    if (!vs) continue;
 
-  if (m_video_next.active && m_video_next.frameCount > 1) {
-    // Steady state: play staged data from next
-    m_video_playing.copyFrom(m_video_next);
-    m_video_next.reset();
-    // Stage accumulating into next for the following swap
-    if (m_video_accumulating.active && m_video_accumulating.frameCount > 1) {
-      m_video_next.copyFrom(m_video_accumulating);
-      memcpy(m_video_append_guid, m_video_accumulating.guid, 16);
-      m_video_append_active = true;
-      m_video_append_to_next = true;
-      m_video_accumulating.data.Resize(0);
-      m_video_accumulating.frameOffsets.Resize(0);
-      m_video_accumulating.frameCount = 0;
+    vs->playing.reset();
+    vs->append_active = false;
+    vs->append_to_next = false;
+    memset(vs->append_guid, 0, 16);
+
+    if (vs->next.active && vs->next.frameCount > 1) {
+      vs->playing.copyFrom(vs->next);
+      vs->next.reset();
+      if (vs->accumulating.active && vs->accumulating.frameCount > 1) {
+        vs->next.copyFrom(vs->accumulating);
+        memcpy(vs->append_guid, vs->accumulating.guid, 16);
+        vs->append_active = true;
+        vs->append_to_next = true;
+        vs->accumulating.data.Resize(0);
+        vs->accumulating.frameOffsets.Resize(0);
+        vs->accumulating.frameCount = 0;
+      }
+    } else if (vs->accumulating.active && vs->accumulating.frameCount > 1) {
+      vs->next.reset();
+      vs->playing.copyFrom(vs->accumulating);
+      memcpy(vs->append_guid, vs->accumulating.guid, 16);
+      vs->append_active = true;
+      vs->append_to_next = false;
+      vs->accumulating.data.Resize(0);
+      vs->accumulating.frameOffsets.Resize(0);
+      vs->accumulating.frameCount = 0;
     }
-  } else if (m_video_accumulating.active && m_video_accumulating.frameCount > 1) {
-    // First data / after gap: play from accumulating directly (1-swap)
-    m_video_next.reset();
-    m_video_playing.copyFrom(m_video_accumulating);
-    memcpy(m_video_append_guid, m_video_accumulating.guid, 16);
-    m_video_append_active = true;
-    m_video_append_to_next = false;
-    m_video_accumulating.data.Resize(0);
-    m_video_accumulating.frameOffsets.Resize(0);
-    m_video_accumulating.frameCount = 0;
-  }
 
-  m_video_frame_idx = 0;
+    vs->frame_idx = 0;
+  }
   m_video_recv_cs.Leave();
 
   // Notify that audio interval just swapped

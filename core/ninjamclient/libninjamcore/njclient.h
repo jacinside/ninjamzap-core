@@ -339,16 +339,14 @@ protected:
   WDL_HeapBuf m_video_spspps;
   WDL_Mutex m_video_spspps_cs;
 
-  // Video receive pipeline — prebuffer + dynamic append for sync with audio.
-  // Data accumulates in m_video_accumulating during download (BEGIN→WRITE→END).
-  // on_new_interval prebuffers from accumulating; late WRITEs append to playing via GUID match.
-  // AudioProc delivers frames paced by expected_frames (from previous complete interval).
+  // Video receive pipeline — per-user buffers for multi-stream support.
+  // Each remote video stream gets its own accumulating/next/playing pipeline.
   struct VideoRecvBuffer {
     WDL_HeapBuf data;
-    WDL_TypedBuf<int> frameOffsets; // byte offset of each chunk in data
+    WDL_TypedBuf<int> frameOffsets;
     int frameCount;
     char username[256];
-    unsigned char guid[16];         // download GUID for routing late WRITEs
+    unsigned char guid[16];
     unsigned int fourcc;
     int chidx;
     bool active;
@@ -365,17 +363,30 @@ protected:
       if (src.frameCount > 0) memcpy(frameOffsets.Get(), src.frameOffsets.Get(), src.frameCount * sizeof(int));
     }
   };
-  VideoRecvBuffer m_video_accumulating; // current download in progress (BEGIN→WRITE→END)
-  VideoRecvBuffer m_video_next;         // completed download, waiting for on_new_interval swap
-  VideoRecvBuffer m_video_playing;      // currently delivering in AudioProc
+
+  // Per-user video receive state
+  struct VideoRecvState {
+    VideoRecvBuffer accumulating;
+    VideoRecvBuffer next;
+    VideoRecvBuffer playing;
+    int frame_idx;
+    int expected_frames;
+    bool append_active;
+    bool append_to_next;
+    unsigned char append_guid[16];
+    char key[280]; // "username:chidx"
+    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false) {
+      memset(append_guid, 0, 16); key[0] = 0;
+    }
+  };
+
+  WDL_PtrList<VideoRecvState> m_video_streams;
   WDL_Mutex m_video_recv_cs;
 
-  // Video playback state
-  int m_video_frame_idx;                // next frame index to deliver from playing buffer
-  int m_video_expected_frames;          // frame count from last complete interval (for pacing)
-  bool m_video_append_active;           // late WRITEs go to the append target buffer
-  bool m_video_append_to_next;          // true: append to next (2-swap), false: append to playing (1-swap)
-  unsigned char m_video_append_guid[16]; // GUID of download being appended
+  VideoRecvState *findVideoStream(const char *username, int chidx);
+  VideoRecvState *findOrCreateVideoStream(const char *username, int chidx);
+  VideoRecvState *findVideoStreamByGUID(const unsigned char *guid);
+  void removeVideoStream(const char *username, int chidx);
 };
 
 
