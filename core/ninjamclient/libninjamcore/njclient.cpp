@@ -1384,14 +1384,15 @@ int NJClient::Run() // nonzero if sleep ok
                              diw.audio_data, diw.audio_data_len);
                       m_video_recv_cs.Leave();
                     }
-                    if (diw.flags & 1) // end — overwrite next (newest data wins)
+                    if (diw.flags & 1) // end — copy to next only if empty (don't overwrite)
                     {
                       m_video_recv_cs.Enter();
                       VideoRecvState *vs = findVideoStreamByGUID(diw.guid);
                       if (vs && vs->accumulating.frameCount > 1) {
                         vs->expected_frames = vs->accumulating.frameCount;
-                        vs->next.reset();
-                        vs->next.copyFrom(vs->accumulating);
+                        if (!vs->next.active) {
+                          vs->next.copyFrom(vs->accumulating);
+                        }
                       }
                       if (vs) vs->accumulating.reset();
                       m_video_recv_cs.Leave();
@@ -2850,12 +2851,18 @@ void NJClient::on_new_interval()
     VideoRecvState *vs = m_video_streams.Get(vi);
     if (!vs) continue;
 
-    // Simple swap: playing = next; next = empty.
-    // END overwrites next with newest data, so this always plays the latest.
+    // Swap: playing = next. If next empty, prebuffer from accumulating.
     vs->playing.reset();
-    if (vs->next.active && vs->next.frameCount > 1)
+    if (vs->next.active && vs->next.frameCount > 1) {
       vs->playing.copyFrom(vs->next);
-    vs->next.reset();
+      vs->next.reset();
+    } else if (vs->accumulating.active && vs->accumulating.frameCount > 1) {
+      // Prebuffer: END hasn't arrived yet but we have partial/complete data
+      vs->playing.copyFrom(vs->accumulating);
+      vs->accumulating.data.Resize(0);
+      vs->accumulating.frameOffsets.Resize(0);
+      vs->accumulating.frameCount = 0;
+    }
     vs->frame_idx = 0;
   }
   m_video_recv_cs.Leave();
