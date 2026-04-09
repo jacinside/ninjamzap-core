@@ -364,16 +364,20 @@ protected:
     }
   };
 
-  // Per-user video receive state.
-  // END puts data into next (overwrites). on_new_interval: playing = next; next = empty.
+  // Per-user video receive state
   struct VideoRecvState {
-    VideoRecvBuffer accumulating;  // current download (BEGIN→WRITE→END)
-    VideoRecvBuffer next;          // completed, ready for next swap
-    VideoRecvBuffer playing;       // currently delivering in AudioProc
+    VideoRecvBuffer accumulating;
+    VideoRecvBuffer next;
+    VideoRecvBuffer playing;
     int frame_idx;
     int expected_frames;
-    char key[280];
-    VideoRecvState() : frame_idx(0), expected_frames(0) { key[0] = 0; }
+    bool append_active;
+    bool append_to_next;
+    unsigned char append_guid[16];
+    char key[280]; // "username:chidx"
+    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false) {
+      memset(append_guid, 0, 16); key[0] = 0;
+    }
   };
 
   WDL_PtrList<VideoRecvState> m_video_streams;
