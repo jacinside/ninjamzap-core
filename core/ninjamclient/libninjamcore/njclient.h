@@ -375,7 +375,8 @@ protected:
     bool append_to_next;
     unsigned char append_guid[16];
     char key[280]; // "username:chidx"
-    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false) {
+    bool first_interval; // skip first partial interval to match audio prebuffer delay
+    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false), first_interval(true) {
       memset(append_guid, 0, 16); key[0] = 0;
     }
   };

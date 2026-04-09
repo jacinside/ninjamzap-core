@@ -2897,11 +2897,22 @@ void NJClient::on_new_interval()
         vs->accumulating.frameCount = 0;
       }
     } else if (vs->accumulating.active && vs->accumulating.frameCount > 1) {
-      vs->next.reset();
-      vs->playing.copyFrom(vs->accumulating);
-      memcpy(vs->append_guid, vs->accumulating.guid, 16);
-      vs->append_active = true;
-      vs->append_to_next = false;
+      if (vs->first_interval) {
+        // First interval after connect: stage in next, don't play yet.
+        // Matches audio's prebuffer delay (audio also skips first partial interval).
+        vs->next.copyFrom(vs->accumulating);
+        memcpy(vs->append_guid, vs->accumulating.guid, 16);
+        vs->append_active = true;
+        vs->append_to_next = true;
+        vs->first_interval = false;
+      } else {
+        // Normal gap recovery: play directly (1-swap)
+        vs->next.reset();
+        vs->playing.copyFrom(vs->accumulating);
+        memcpy(vs->append_guid, vs->accumulating.guid, 16);
+        vs->append_active = true;
+        vs->append_to_next = false;
+      }
       vs->accumulating.data.Resize(0);
       vs->accumulating.frameOffsets.Resize(0);
       vs->accumulating.frameCount = 0;
