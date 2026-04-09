@@ -364,21 +364,17 @@ protected:
     }
   };
 
-  // Per-user video receive state
+  // Per-user video receive state — mirrors audio's next_ds[0]/next_ds[1] queue.
+  // Data goes into next_ds[] when ready (on END), not at swap time.
+  // on_new_interval advances: playing=next_ds[0], next_ds[0]=next_ds[1], next_ds[1]=empty.
   struct VideoRecvState {
-    VideoRecvBuffer accumulating;
-    VideoRecvBuffer next;
-    VideoRecvBuffer playing;
+    VideoRecvBuffer accumulating;  // current download (BEGIN→WRITE→END)
+    VideoRecvBuffer next_ds[2];    // 2-slot queue, like audio
+    VideoRecvBuffer playing;       // currently delivering in AudioProc
     int frame_idx;
     int expected_frames;
-    bool append_active;
-    bool append_to_next;
-    unsigned char append_guid[16];
-    char key[280]; // "username:chidx"
-    bool first_interval; // skip first partial interval to match audio prebuffer delay
-    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false), first_interval(true) {
-      memset(append_guid, 0, 16); key[0] = 0;
-    }
+    char key[280];
+    VideoRecvState() : frame_idx(0), expected_frames(0) { key[0] = 0; }
   };
 
   WDL_PtrList<VideoRecvState> m_video_streams;
