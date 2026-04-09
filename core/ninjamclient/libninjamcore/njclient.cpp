@@ -1384,18 +1384,14 @@ int NJClient::Run() // nonzero if sleep ok
                              diw.audio_data, diw.audio_data_len);
                       m_video_recv_cs.Leave();
                     }
-                    if (diw.flags & 1) // end — put into next_ds queue (like audio startPlaying)
+                    if (diw.flags & 1) // end — overwrite next (newest data wins)
                     {
                       m_video_recv_cs.Enter();
                       VideoRecvState *vs = findVideoStreamByGUID(diw.guid);
                       if (vs && vs->accumulating.frameCount > 1) {
                         vs->expected_frames = vs->accumulating.frameCount;
-                        // Put into first empty slot (like audio next_ds[useidx])
-                        int useidx = vs->next_ds[0].active ? 1 : 0;
-                        if (useidx < 2) {
-                          vs->next_ds[useidx].reset();
-                          vs->next_ds[useidx].copyFrom(vs->accumulating);
-                        }
+                        vs->next.reset();
+                        vs->next.copyFrom(vs->accumulating);
                       }
                       if (vs) vs->accumulating.reset();
                       m_video_recv_cs.Leave();
@@ -2854,15 +2850,12 @@ void NJClient::on_new_interval()
     VideoRecvState *vs = m_video_streams.Get(vi);
     if (!vs) continue;
 
+    // Simple swap: playing = next; next = empty.
+    // END overwrites next with newest data, so this always plays the latest.
     vs->playing.reset();
-    if (vs->next_ds[0].active && vs->next_ds[0].frameCount > 1)
-      vs->playing.copyFrom(vs->next_ds[0]);
-
-    vs->next_ds[0].reset();
-    if (vs->next_ds[1].active)
-      vs->next_ds[0].copyFrom(vs->next_ds[1]);
-    vs->next_ds[1].reset();
-
+    if (vs->next.active && vs->next.frameCount > 1)
+      vs->playing.copyFrom(vs->next);
+    vs->next.reset();
     vs->frame_idx = 0;
   }
   m_video_recv_cs.Leave();

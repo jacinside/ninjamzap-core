@@ -364,12 +364,11 @@ protected:
     }
   };
 
-  // Per-user video receive state — mirrors audio's next_ds[0]/next_ds[1] queue.
-  // Data goes into next_ds[] when ready (on END), not at swap time.
-  // on_new_interval advances: playing=next_ds[0], next_ds[0]=next_ds[1], next_ds[1]=empty.
+  // Per-user video receive state.
+  // END puts data into next (overwrites). on_new_interval: playing = next; next = empty.
   struct VideoRecvState {
     VideoRecvBuffer accumulating;  // current download (BEGIN→WRITE→END)
-    VideoRecvBuffer next_ds[2];    // 2-slot queue, like audio
+    VideoRecvBuffer next;          // completed, ready for next swap
     VideoRecvBuffer playing;       // currently delivering in AudioProc
     int frame_idx;
     int expected_frames;
