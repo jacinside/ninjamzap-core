@@ -124,6 +124,44 @@ void OboeEngine::setSharingMode(oboe::SharingMode mode) {
     m_sharingMode = mode;
 }
 
+void OboeEngine::setInputDeviceId(int32_t deviceId) {
+    LOGI("setInputDeviceId: %d", deviceId);
+    m_inputDeviceId = deviceId;
+    if (m_running.load()) {
+        // Hot-swap input stream without touching output
+        if (m_inputStream) {
+            m_callback->setInputStream(nullptr);
+            m_inputStream->requestStop();
+            m_inputStream->close();
+            m_inputStream.reset();
+        }
+        if (openInputStream()) {
+            m_callback->setInputStream(m_inputStream.get());
+            oboe::Result result = m_inputStream->requestStart();
+            if (result != oboe::Result::OK) {
+                LOGE("Failed to restart input stream: %s", oboe::convertToText(result));
+                m_callback->setInputStream(nullptr);
+                m_inputStream.reset();
+            } else {
+                LOGI("Input stream restarted with device %d (%dHz, %d ch)",
+                     deviceId, m_inputStream->getSampleRate(), m_inputStream->getChannelCount());
+            }
+        }
+    }
+}
+
+void OboeEngine::setOutputDeviceId(int32_t deviceId) {
+    LOGI("setOutputDeviceId: %d", deviceId);
+    m_outputDeviceId = deviceId;
+    if (m_running.load()) {
+        // Output drives the audio callback — full restart required
+        int32_t savedSampleRate = m_sampleRate;
+        int32_t savedFramesPerBuffer = m_framesPerBuffer;
+        stop();
+        start(savedSampleRate, savedFramesPerBuffer);
+    }
+}
+
 // ============================================================================
 // Private
 // ============================================================================
@@ -140,6 +178,11 @@ bool OboeEngine::openOutputStream() {
            ->setDataCallback(m_callback)
            ->setErrorCallback(m_callback)
            ->setUsage(oboe::Usage::Game);  // Low-latency usage hint
+
+    if (m_outputDeviceId != oboe::kUnspecified) {
+        builder.setDeviceId(m_outputDeviceId);
+        LOGI("Output stream targeting device %d", m_outputDeviceId);
+    }
 
     oboe::Result result = builder.openStream(m_outputStream);
     if (result != oboe::Result::OK) {
@@ -161,6 +204,11 @@ bool OboeEngine::openInputStream() {
            ->setChannelCount(oboe::ChannelCount::Mono)   // Most mics are mono
            ->setSampleRate(m_sampleRate)                  // Match output sample rate
            ->setInputPreset(oboe::InputPreset::VoicePerformance);  // Low-latency mic preset
+
+    if (m_inputDeviceId != oboe::kUnspecified) {
+        builder.setDeviceId(m_inputDeviceId);
+        LOGI("Input stream targeting device %d", m_inputDeviceId);
+    }
 
     oboe::Result result = builder.openStream(m_inputStream);
     if (result != oboe::Result::OK) {

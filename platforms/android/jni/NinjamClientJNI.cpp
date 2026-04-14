@@ -705,6 +705,18 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeAudioEngineGetInputP
     env->ReleaseFloatArrayElements(peaks, p, 0);
 }
 
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetInputDeviceId(JNIEnv* env, jobject thiz, jlong enginePtr, jint deviceId) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (engine) engine->setInputDeviceId(deviceId);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetOutputDeviceId(JNIEnv* env, jobject thiz, jlong enginePtr, jint deviceId) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (engine) engine->setOutputDeviceId(deviceId);
+}
+
 // ============================================================================
 // Session Recording
 // ============================================================================

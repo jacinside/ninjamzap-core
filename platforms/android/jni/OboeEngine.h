@@ -53,6 +53,10 @@ public:
     void setPerformanceMode(oboe::PerformanceMode mode);
     void setSharingMode(oboe::SharingMode mode);
 
+    // Audio device routing — thread device selection into Oboe streams
+    void setInputDeviceId(int32_t deviceId);
+    void setOutputDeviceId(int32_t deviceId);
+
 private:
     // Streams
     std::shared_ptr<oboe::AudioStream> m_outputStream;
@@ -76,6 +80,10 @@ private:
     int32_t m_framesPerBuffer = 256;
     oboe::PerformanceMode m_performanceMode = oboe::PerformanceMode::LowLatency;
     oboe::SharingMode m_sharingMode = oboe::SharingMode::Exclusive;
+
+    // Device routing (kUnspecified = system default)
+    int32_t m_inputDeviceId = oboe::kUnspecified;
+    int32_t m_outputDeviceId = oboe::kUnspecified;
 
     // Helpers
     bool openOutputStream();
