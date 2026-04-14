@@ -705,6 +705,36 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeAudioEngineGetInputP
     env->ReleaseFloatArrayElements(peaks, p, 0);
 }
 
+JNIEXPORT jfloatArray JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamMetrics(JNIEnv* env, jobject thiz, jlong enginePtr) {
+    // Returns [outBurst, outBufSize, inBurst, inBufSize, sampleRate]
+    jfloatArray result = env->NewFloatArray(5);
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (engine) {
+        float data[5] = {
+            (float)engine->getOutputBurstSize(),
+            (float)engine->getOutputBufferSize(),
+            (float)engine->getInputBurstSize(),
+            (float)engine->getInputBufferSize(),
+            (float)engine->getSampleRate()
+        };
+        env->SetFloatArrayRegion(result, 0, 5, data);
+    }
+    return result;
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetDirectMonitor(JNIEnv* env, jobject thiz, jlong enginePtr, jboolean enabled) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (engine) engine->setDirectMonitor(enabled);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetDirectMonitorGain(JNIEnv* env, jobject thiz, jlong enginePtr, jfloat gain) {
+    auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (engine) engine->setDirectMonitorGain(gain);
+}
+
 JNIEXPORT void JNICALL
 Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetInputDeviceId(JNIEnv* env, jobject thiz, jlong enginePtr, jint deviceId) {
     auto* engine = reinterpret_cast<OboeEngine*>(enginePtr);

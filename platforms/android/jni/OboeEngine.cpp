@@ -69,17 +69,35 @@ bool OboeEngine::start(int32_t sampleRate, int32_t framesPerBuffer) {
     m_running.store(true);
 
     // Log actual negotiated parameters
+    int32_t outRate = m_outputStream->getSampleRate();
+    int32_t outBurst = m_outputStream->getFramesPerBurst();
+    int32_t outBufCap = m_outputStream->getBufferCapacityInFrames();
+    int32_t outBufSize = m_outputStream->getBufferSizeInFrames();
+    double outLatencyMs = (double)outBurst / outRate * 1000.0;
+    double outBufMs = (double)outBufSize / outRate * 1000.0;
+
     LOGI("Audio engine started successfully:");
-    LOGI("  Output: %dHz, %d ch, %d frames, %s",
-         m_outputStream->getSampleRate(),
-         m_outputStream->getChannelCount(),
-         m_outputStream->getFramesPerBurst(),
-         oboe::convertToText(m_outputStream->getPerformanceMode()));
+    LOGI("  Output: %dHz, %d ch, burst=%d (%.1fms), bufSize=%d (%.1fms), bufCap=%d, %s %s",
+         outRate, m_outputStream->getChannelCount(),
+         outBurst, outLatencyMs,
+         outBufSize, outBufMs,
+         outBufCap,
+         oboe::convertToText(m_outputStream->getPerformanceMode()),
+         oboe::convertToText(m_outputStream->getSharingMode()));
     if (m_inputStream) {
-        LOGI("  Input:  %dHz, %d ch, %d frames",
-             m_inputStream->getSampleRate(),
-             m_inputStream->getChannelCount(),
-             m_inputStream->getFramesPerBurst());
+        int32_t inRate = m_inputStream->getSampleRate();
+        int32_t inBurst = m_inputStream->getFramesPerBurst();
+        int32_t inBufSize = m_inputStream->getBufferSizeInFrames();
+        double inLatencyMs = (double)inBurst / inRate * 1000.0;
+        double inBufMs = (double)inBufSize / inRate * 1000.0;
+        LOGI("  Input:  %dHz, %d ch, burst=%d (%.1fms), bufSize=%d (%.1fms), %s %s",
+             inRate, m_inputStream->getChannelCount(),
+             inBurst, inLatencyMs,
+             inBufSize, inBufMs,
+             oboe::convertToText(m_inputStream->getPerformanceMode()),
+             oboe::convertToText(m_inputStream->getSharingMode()));
+        double totalMs = inLatencyMs + outLatencyMs;
+        LOGI("  Estimated roundtrip: %.1fms (input burst + output burst)", totalMs);
     }
 
     return true;
@@ -122,6 +140,31 @@ void OboeEngine::setPerformanceMode(oboe::PerformanceMode mode) {
 
 void OboeEngine::setSharingMode(oboe::SharingMode mode) {
     m_sharingMode = mode;
+}
+
+int32_t OboeEngine::getOutputBurstSize() const {
+    return m_outputStream ? m_outputStream->getFramesPerBurst() : 0;
+}
+
+int32_t OboeEngine::getOutputBufferSize() const {
+    return m_outputStream ? m_outputStream->getBufferSizeInFrames() : 0;
+}
+
+int32_t OboeEngine::getInputBurstSize() const {
+    return m_inputStream ? m_inputStream->getFramesPerBurst() : 0;
+}
+
+int32_t OboeEngine::getInputBufferSize() const {
+    return m_inputStream ? m_inputStream->getBufferSizeInFrames() : 0;
+}
+
+void OboeEngine::setDirectMonitor(bool enabled) {
+    LOGI("setDirectMonitor: %s", enabled ? "ON" : "OFF");
+    m_callback->setDirectMonitor(enabled);
+}
+
+void OboeEngine::setDirectMonitorGain(float gain) {
+    m_callback->setDirectMonitorGain(gain);
 }
 
 void OboeEngine::setInputDeviceId(int32_t deviceId) {
@@ -192,6 +235,19 @@ bool OboeEngine::openOutputStream() {
 
     // Update sample rate to what the device actually gave us
     m_sampleRate = m_outputStream->getSampleRate();
+
+    // Set output buffer size based on latency profile.
+    // m_framesPerBuffer encodes the user's latency preference:
+    //   128 (ultra_low) → 1 burst — minimum latency, may glitch on weak devices
+    //   256 (low)       → 2 bursts — good balance
+    //   512 (safe)      → 3 bursts — safest, higher latency
+    int32_t burst = m_outputStream->getFramesPerBurst();
+    int32_t numBursts = (m_framesPerBuffer <= 128) ? 1 : (m_framesPerBuffer <= 256) ? 2 : 3;
+    m_outputStream->setBufferSizeInFrames(burst * numBursts);
+    LOGI("Output buffer: %d bursts x %d frames = %d frames (%.1fms)",
+         numBursts, burst, burst * numBursts,
+         (double)(burst * numBursts) / m_sampleRate * 1000.0);
+
     return true;
 }
 
@@ -233,8 +289,15 @@ bool OboeEngine::openInputStream() {
         return false;
     }
 
-    LOGI("Input stream opened: %d ch, %dHz",
-         m_inputStream->getChannelCount(), m_inputStream->getSampleRate());
+    // Set input buffer size matching output latency profile
+    int32_t inBurst = m_inputStream->getFramesPerBurst();
+    int32_t inNumBursts = (m_framesPerBuffer <= 128) ? 1 : (m_framesPerBuffer <= 256) ? 2 : 3;
+    m_inputStream->setBufferSizeInFrames(inBurst * inNumBursts);
+
+    LOGI("Input stream opened: %d ch, %dHz, burst=%d (%.1fms), bufSize=%d (%d bursts)",
+         m_inputStream->getChannelCount(), m_inputStream->getSampleRate(),
+         inBurst, (double)inBurst / m_inputStream->getSampleRate() * 1000.0,
+         m_inputStream->getBufferSizeInFrames(), inNumBursts);
     return true;
 }
 

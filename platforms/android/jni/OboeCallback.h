@@ -50,6 +50,10 @@ public:
     void getOutputPeaks(float* left, float* right) const;
     void getInputPeaks(float* left, float* right) const;
 
+    // Direct monitoring: mix local input straight into output, bypassing NJClient monitoring
+    void setDirectMonitor(bool enabled);
+    void setDirectMonitorGain(float gain);
+
 private:
     NinjamClientRef* m_client = nullptr;
     AudioFXProcessor* m_fxProcessor = nullptr;
@@ -62,6 +66,10 @@ private:
     float m_inRight[MAX_FRAMES] = {};
     float m_outLeft[MAX_FRAMES] = {};
     float m_outRight[MAX_FRAMES] = {};
+
+    // Direct monitor state
+    std::atomic<bool> m_directMonitor{false};
+    std::atomic<float> m_directMonitorGain{1.0f};  // localVol * masterVol * mute flags
 
     // Peak tracking (atomic for cross-thread access)
     std::atomic<float> m_outputPeakL{0.0f};

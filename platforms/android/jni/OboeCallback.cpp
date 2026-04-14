@@ -84,6 +84,18 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
         );
     }
 
+    // Direct monitoring: mix local input straight into output (bypasses NJClient monitoring).
+    // Gain combines local volume, local mute, master volume, and master mute.
+    if (m_directMonitor.load(std::memory_order_relaxed)) {
+        float gain = m_directMonitorGain.load(std::memory_order_relaxed);
+        if (gain > 0.0f) {
+            for (int32_t i = 0; i < framesToProcess; i++) {
+                m_outLeft[i] += m_inLeft[i] * gain;
+                m_outRight[i] += m_inRight[i] * gain;
+            }
+        }
+    }
+
     // Track output peaks
     m_outputPeakL.store(calculatePeak(m_outLeft, framesToProcess), std::memory_order_relaxed);
     m_outputPeakR.store(calculatePeak(m_outRight, framesToProcess), std::memory_order_relaxed);
@@ -121,6 +133,14 @@ void NinjamOboeCallback::onErrorAfterClose(oboe::AudioStream* stream, oboe::Resu
     LOGE("Oboe stream error after close: %s", oboe::convertToText(error));
     // TODO: Notify Kotlin layer to restart the audio engine
     // This is the equivalent of iOS AVAudioEngine configurationChangeNotification
+}
+
+void NinjamOboeCallback::setDirectMonitor(bool enabled) {
+    m_directMonitor.store(enabled, std::memory_order_relaxed);
+}
+
+void NinjamOboeCallback::setDirectMonitorGain(float gain) {
+    m_directMonitorGain.store(gain, std::memory_order_relaxed);
 }
 
 void NinjamOboeCallback::getOutputPeaks(float* left, float* right) const {

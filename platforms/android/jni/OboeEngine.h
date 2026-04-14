@@ -57,6 +57,16 @@ public:
     void setInputDeviceId(int32_t deviceId);
     void setOutputDeviceId(int32_t deviceId);
 
+    // Direct monitoring — mix local input into output, bypassing NJClient monitoring
+    void setDirectMonitor(bool enabled);
+    void setDirectMonitorGain(float gain);
+
+    // Real stream metrics (for latency display)
+    int32_t getOutputBurstSize() const;
+    int32_t getOutputBufferSize() const;
+    int32_t getInputBurstSize() const;
+    int32_t getInputBufferSize() const;
+
 private:
     // Streams
     std::shared_ptr<oboe::AudioStream> m_outputStream;
