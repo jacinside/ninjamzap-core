@@ -197,25 +197,44 @@ bool OboeEngine::openOutputStream() {
 
 bool OboeEngine::openInputStream() {
     oboe::AudioStreamBuilder builder;
+
+    // USB audio interfaces typically expose stereo (or more) channels.
+    // Built-in mics are mono. Request stereo when a specific device is
+    // selected so we capture channels 1+2; fall back to mono for the
+    // default built-in mic. The callback already handles both cases.
+    auto channelCount = (m_inputDeviceId != oboe::kUnspecified)
+        ? oboe::ChannelCount::Stereo
+        : oboe::ChannelCount::Mono;
+
     builder.setDirection(oboe::Direction::Input)
            ->setPerformanceMode(m_performanceMode)
            ->setSharingMode(oboe::SharingMode::Shared)  // Input usually needs Shared
            ->setFormat(oboe::AudioFormat::Float)
-           ->setChannelCount(oboe::ChannelCount::Mono)   // Most mics are mono
+           ->setChannelCount(channelCount)
            ->setSampleRate(m_sampleRate)                  // Match output sample rate
            ->setInputPreset(oboe::InputPreset::VoicePerformance);  // Low-latency mic preset
 
     if (m_inputDeviceId != oboe::kUnspecified) {
         builder.setDeviceId(m_inputDeviceId);
-        LOGI("Input stream targeting device %d", m_inputDeviceId);
+        LOGI("Input stream targeting device %d (stereo)", m_inputDeviceId);
     }
 
     oboe::Result result = builder.openStream(m_inputStream);
+
+    // If stereo open failed on the USB device, fall back to mono
+    if (result != oboe::Result::OK && channelCount == oboe::ChannelCount::Stereo) {
+        LOGI("Stereo input failed, falling back to mono");
+        builder.setChannelCount(oboe::ChannelCount::Mono);
+        result = builder.openStream(m_inputStream);
+    }
+
     if (result != oboe::Result::OK) {
         LOGE("Failed to open input stream: %s", oboe::convertToText(result));
         return false;
     }
 
+    LOGI("Input stream opened: %d ch, %dHz",
+         m_inputStream->getChannelCount(), m_inputStream->getSampleRate());
     return true;
 }
 
