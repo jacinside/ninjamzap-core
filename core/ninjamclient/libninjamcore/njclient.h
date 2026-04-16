@@ -349,9 +349,10 @@ protected:
     unsigned char guid[16];
     unsigned int fourcc;
     int chidx;
+    int interval_seq; // which interval this data belongs to (-1 = none)
     bool active;
-    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), active(false) { username[0] = 0; memset(guid, 0, 16); }
-    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; active = false; username[0] = 0; memset(guid, 0, 16); }
+    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), interval_seq(-1), active(false) { username[0] = 0; memset(guid, 0, 16); }
+    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; interval_seq = -1; active = false; username[0] = 0; memset(guid, 0, 16); }
     void copyFrom(const VideoRecvBuffer &src) {
       fourcc = src.fourcc; chidx = src.chidx; active = src.active; frameCount = src.frameCount;
       memcpy(username, src.username, sizeof(username));
@@ -361,6 +362,7 @@ protected:
       if (sz > 0) memcpy(data.Get(), src.data.Get(), sz);
       frameOffsets.Resize(src.frameCount, false);
       if (src.frameCount > 0) memcpy(frameOffsets.Get(), src.frameOffsets.Get(), src.frameCount * sizeof(int));
+      interval_seq = src.interval_seq;
     }
   };
 
