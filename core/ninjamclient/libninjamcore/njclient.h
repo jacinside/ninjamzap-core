@@ -264,6 +264,7 @@ protected:
   int m_status;
   int m_max_localch;
   int m_connection_keepalive;
+  int m_sync_interval_cnt; // debug: interval counter for sync logging
   bool m_server_video_supported; // server advertised video capability (bit 1 of server_caps)
   FILE *m_logFile;
 #ifndef NJCLIENT_NO_XMIT_SUPPORT
@@ -349,7 +350,7 @@ protected:
     unsigned char guid[16];
     unsigned int fourcc;
     int chidx;
-    int interval_seq; // which interval this data belongs to (-1 = none)
+    int interval_seq; // debug: which interval this data belongs to
     bool active;
     VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), interval_seq(-1), active(false) { username[0] = 0; memset(guid, 0, 16); }
     void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; interval_seq = -1; active = false; username[0] = 0; memset(guid, 0, 16); }
@@ -376,9 +377,13 @@ protected:
     bool append_active;
     bool append_to_next;
     unsigned char append_guid[16];
+    // Stable identifiers — set at creation, never reset. accumulating's username/chidx
+    // can be cleared by reset(), so we can't rely on those for stream lookup.
+    char stream_username[256];
+    int stream_chidx;
     char key[280]; // "username:chidx"
-    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false) {
-      memset(append_guid, 0, 16); key[0] = 0;
+    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false), stream_chidx(0) {
+      memset(append_guid, 0, 16); key[0] = 0; stream_username[0] = 0;
     }
   };
 

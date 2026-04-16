@@ -1352,6 +1352,14 @@ int NJClient::Run() // nonzero if sleep ok
                     vs->append_active = false;
                     memset(vs->append_guid, 0, 16);
                   }
+                  // Burst detection: if next already has data when a new BEGIN arrives,
+                  // the sender is sending >1 interval per receiver interval (e.g., after
+                  // a toggle off/on). Discarding next keeps video aligned with audio
+                  // instead of queueing and falling further behind each burst.
+                  if (vs->next.active) {
+                    SYNCLOG("video BURST detected: key=%s discarding next seq=%d fr=%d", vs->key, vs->next.interval_seq, vs->next.frameCount);
+                    vs->next.reset();
+                  }
                   vs->accumulating.reset();
                   vs->accumulating.fourcc = dib.fourcc;
                   vs->accumulating.chidx = dib.chidx;
@@ -1359,7 +1367,7 @@ int NJClient::Run() // nonzero if sleep ok
                   memcpy(vs->accumulating.guid, dib.guid, 16);
                   vs->accumulating.active = true;
                   vs->accumulating.interval_seq = m_sync_interval_cnt;
-                  SYNCLOG("video BEGIN: key=%s interval=%d", vs->key, m_sync_interval_cnt);
+                  SYNCLOG("video BEGIN: key=%s interval=%d seq=%d next.active=%d", vs->key, m_sync_interval_cnt, vs->accumulating.interval_seq, vs->next.active ? 1 : 0);
                   m_video_recv_cs.Leave();
 
                   if (RawData_Callback)
@@ -2021,7 +2029,7 @@ NJClient::VideoRecvState *NJClient::findVideoStream(const char *username, int ch
 {
   for (int i = 0; i < m_video_streams.GetSize(); i++) {
     VideoRecvState *vs = m_video_streams.Get(i);
-    if (vs && vs->accumulating.chidx == chidx && !strcmp(vs->accumulating.username, username))
+    if (vs && vs->stream_chidx == chidx && !strcmp(vs->stream_username, username))
       return vs;
   }
   return NULL;
@@ -2033,6 +2041,8 @@ NJClient::VideoRecvState *NJClient::findOrCreateVideoStream(const char *username
   if (!vs) {
     vs = new VideoRecvState;
     snprintf(vs->key, sizeof(vs->key), "%s:%d", username, chidx);
+    lstrcpyn_safe(vs->stream_username, username, sizeof(vs->stream_username));
+    vs->stream_chidx = chidx;
     lstrcpyn_safe(vs->accumulating.username, username, sizeof(vs->accumulating.username));
     vs->accumulating.chidx = chidx;
     m_video_streams.Add(vs);
@@ -2056,7 +2066,7 @@ void NJClient::removeVideoStream(const char *username, int chidx)
 {
   for (int i = 0; i < m_video_streams.GetSize(); i++) {
     VideoRecvState *vs = m_video_streams.Get(i);
-    if (vs && vs->accumulating.chidx == chidx && !strcmp(vs->accumulating.username, username)) {
+    if (vs && vs->stream_chidx == chidx && !strcmp(vs->stream_username, username)) {
       delete vs;
       m_video_streams.Delete(i);
       return;
@@ -2956,12 +2966,12 @@ void NJClient::on_new_interval()
     vs->append_to_next = false;
     memset(vs->append_guid, 0, 16);
 
-    // Safety net: discard stale data in next (shouldn't happen with startPlaying guard,
-    // but protects against edge cases).
-    if (vs->next.active && vs->next.interval_seq >= 0 && vs->next.interval_seq < m_sync_interval_cnt - 1) {
-      SYNCLOG("SWAP#%d video STALE: key=%s seq=%d expected>=%d — discarding", m_sync_interval_cnt, vs->key, vs->next.interval_seq, m_sync_interval_cnt - 1);
-      vs->next.reset();
-    }
+    // Note: stale check on interval_seq was removed. Guid-based WRITE routing
+    // already prevents stale data from polluting next. In burst scenarios
+    // (e.g., user toggles video off/on), 2 BEGINs can arrive in the same
+    // receiver interval — the 2nd BEGIN's data gets labeled with the current
+    // interval but plays at SWAP+2 (implicit queue via accumulating→next).
+    // A stale check would incorrectly discard that valid queued data.
 
     if (vs->next.active && vs->next.frameCount >= 1) {
       // Check if audio for this user also has data — only play if audio is playing too.
