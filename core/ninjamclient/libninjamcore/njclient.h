@@ -350,10 +350,11 @@ protected:
     unsigned char guid[16];
     unsigned int fourcc;
     int chidx;
-    int interval_seq; // debug: which interval this data belongs to
+    int interval_seq; // receiver's interval counter at BEGIN time
+    int sender_interval; // sender's interval counter (read from marker chunk, -1=no marker)
     bool active;
-    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), interval_seq(-1), active(false) { username[0] = 0; memset(guid, 0, 16); }
-    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; interval_seq = -1; active = false; username[0] = 0; memset(guid, 0, 16); }
+    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), interval_seq(-1), sender_interval(-1), active(false) { username[0] = 0; memset(guid, 0, 16); }
+    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; interval_seq = -1; sender_interval = -1; active = false; username[0] = 0; memset(guid, 0, 16); }
     void copyFrom(const VideoRecvBuffer &src) {
       fourcc = src.fourcc; chidx = src.chidx; active = src.active; frameCount = src.frameCount;
       memcpy(username, src.username, sizeof(username));
@@ -364,6 +365,7 @@ protected:
       frameOffsets.Resize(src.frameCount, false);
       if (src.frameCount > 0) memcpy(frameOffsets.Get(), src.frameOffsets.Get(), src.frameCount * sizeof(int));
       interval_seq = src.interval_seq;
+      sender_interval = src.sender_interval;
     }
   };
 
@@ -382,7 +384,8 @@ protected:
     char stream_username[256];
     int stream_chidx;
     char key[280]; // "username:chidx"
-    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false), stream_chidx(0) {
+    bool depth_aligned; // one-shot: held once at connect when audio is 2-deep
+    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false), stream_chidx(0), depth_aligned(false) {
       memset(append_guid, 0, 16); key[0] = 0; stream_username[0] = 0;
     }
   };

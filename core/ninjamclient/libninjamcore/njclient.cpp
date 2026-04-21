@@ -897,18 +897,17 @@ void NJClient::AudioProc(float **inbuf, int innch, float **outbuf, int outnch, i
 
         if (readyFrames > 0 && expected > 0)
         {
-          // Pacing: frame 0 is SPS/PPS (decoder setup, no visual), frame 1 is the IDR
-          // (first visible frame). Deliver both immediately at swap so the new interval's
-          // video shows at t=0 instead of waiting 1/expected of the interval, which would
-          // hold the previous frame causing a visible freeze. Frames 2..N pace evenly.
-          int videoSlots = expected > 1 ? expected - 1 : 1;
+          // Pacing: frame 0 = sender interval marker (4 bytes, no visual).
+          // Frame 1 = SPS/PPS (decoder setup, no visual). Frame 2 = IDR (first visible).
+          // Deliver 0-2 immediately at swap. Frames 3..N pace evenly.
+          int videoSlots = expected > 2 ? expected - 2 : 1;
           while (vs->frame_idx < readyFrames)
           {
             int threshold;
-            if (vs->frame_idx <= 1) {
+            if (vs->frame_idx <= 2) {
               threshold = 0;
             } else {
-              threshold = (int)((int64_t)(vs->frame_idx - 1) * m_interval_length / videoSlots);
+              threshold = (int)((int64_t)(vs->frame_idx - 2) * m_interval_length / videoSlots);
             }
             if (m_interval_pos >= threshold)
             {
@@ -1453,6 +1452,13 @@ int NJClient::Run() // nonzero if sleep ok
                         target->data.Resize(curSize + diw.audio_data_len, false);
                         memcpy((char*)target->data.Get() + curSize,
                                diw.audio_data, diw.audio_data_len);
+
+                        // Parse sender interval marker from first chunk of each download.
+                        // Sender prepends 4 bytes (big-endian m_sync_interval_cnt) before SPS/PPS.
+                        if (targetIsAccumulating && vs->accumulating.frameCount == 1 && diw.audio_data_len == 4) {
+                          const unsigned char *m = (const unsigned char *)diw.audio_data;
+                          vs->accumulating.sender_interval = (m[0]<<24)|(m[1]<<16)|(m[2]<<8)|m[3];
+                        }
 
                         // Mid-download startPlaying (only for fresh accumulating data).
                         if (targetIsAccumulating && !vs->append_active && vs->accumulating.frameCount >= 1 && !vs->next.active) {
@@ -2943,7 +2949,17 @@ void NJClient::on_new_interval()
       RawDataSendWrite(m_video_guid, NULL, 0, true); // END previous
     RawDataSendBegin(m_video_guid, m_video_fourcc, m_video_chidx, 0); // BEGIN new
     m_video_interval_open = true;
-    // Send cached SPS/PPS as first chunk so receiver can init decoder
+    // Send sender's interval marker as first chunk (4 bytes big-endian).
+    // Receiver reads this to match video playback with audio's interval.
+    {
+      unsigned char marker[4];
+      marker[0] = (unsigned char)((m_sync_interval_cnt >> 24) & 0xFF);
+      marker[1] = (unsigned char)((m_sync_interval_cnt >> 16) & 0xFF);
+      marker[2] = (unsigned char)((m_sync_interval_cnt >> 8) & 0xFF);
+      marker[3] = (unsigned char)(m_sync_interval_cnt & 0xFF);
+      RawDataSendWrite(m_video_guid, marker, 4, false);
+    }
+    // Send cached SPS/PPS as second chunk so receiver can init decoder
     m_video_spspps_cs.Enter();
     if (m_video_spspps.GetSize() > 0)
       RawDataSendWrite(m_video_guid, m_video_spspps.Get(), m_video_spspps.GetSize(), false);
@@ -2976,20 +2992,28 @@ void NJClient::on_new_interval()
     if (vs->next.active && vs->next.frameCount >= 1) {
       // Check if audio for this user also has data — only play if audio is playing too.
       bool audioHasData = false;
+      bool audioQueued = false; // true if audio has next interval queued (2-deep)
       for (int ui = 0; ui < m_remoteusers.GetSize() && !audioHasData; ui++) {
         RemoteUser *ru = m_remoteusers.Get(ui);
         if (ru && !strcmp(ru->name.Get(), vs->next.username)) {
           if (ru->channels[0].ds) audioHasData = true;
+          if (ru->channels[0].next_ds[0]) audioQueued = true;
         }
       }
       if (!audioHasData) {
-        SYNCLOG("SWAP#%d video HOLD: key=%s seq=%d frames=%d", m_sync_interval_cnt, vs->key, vs->next.interval_seq, vs->next.frameCount);
+        SYNCLOG("SWAP#%d video HOLD: key=%s seq=%d sender=%d frames=%d", m_sync_interval_cnt, vs->key, vs->next.interval_seq, vs->next.sender_interval, vs->next.frameCount);
+      } else if (audioQueued && !vs->depth_aligned && vs->next.sender_interval > 0) {
+        // One-shot depth alignment: audio is 2-deep (ds + nds0) while video is 1-deep.
+        // HOLD video once to match audio's buffer depth. After this, both advance 1:1.
+        vs->depth_aligned = true;
+        SYNCLOG("SWAP#%d video DEPTH-HOLD: key=%s sender=%d (audio 2-deep, aligning)", m_sync_interval_cnt, vs->key, vs->next.sender_interval);
       } else {
-        SYNCLOG("SWAP#%d video PLAY: key=%s seq=%d frames=%d", m_sync_interval_cnt, vs->key, vs->next.interval_seq, vs->next.frameCount);
+        SYNCLOG("SWAP#%d video PLAY: key=%s seq=%d sender=%d frames=%d aQ=%d", m_sync_interval_cnt, vs->key, vs->next.interval_seq, vs->next.sender_interval, vs->next.frameCount, audioQueued ? 1 : 0);
         vs->playing.reset();
         vs->playing.copyFrom(vs->next);
         vs->next.reset();
         vs->frame_idx = 0;
+        if (!vs->depth_aligned) vs->depth_aligned = true;
       }
     } else if (vs->accumulating.active && vs->accumulating.frameCount >= 1) {
       // Fallback: startPlaying didn't fire (video data arrived late).
