@@ -2950,7 +2950,6 @@ void NJClient::on_new_interval()
     RawDataSendBegin(m_video_guid, m_video_fourcc, m_video_chidx, 0); // BEGIN new
     m_video_interval_open = true;
     // Send sender's interval marker as first chunk (4 bytes big-endian).
-    // Receiver reads this to match video playback with audio's interval.
     {
       unsigned char marker[4];
       marker[0] = (unsigned char)((m_sync_interval_cnt >> 24) & 0xFF);
@@ -2990,14 +2989,12 @@ void NJClient::on_new_interval()
     // A stale check would incorrectly discard that valid queued data.
 
     if (vs->next.active && vs->next.frameCount >= 1) {
-      // Check if audio for this user also has data — only play if audio is playing too.
       bool audioHasData = false;
-      bool audioQueued = false; // true if audio has next interval queued (2-deep)
-      for (int ui = 0; ui < m_remoteusers.GetSize() && !audioHasData; ui++) {
+      for (int ui = 0; ui < m_remoteusers.GetSize(); ui++) {
         RemoteUser *ru = m_remoteusers.Get(ui);
         if (ru && !strcmp(ru->name.Get(), vs->next.username)) {
           if (ru->channels[0].ds) audioHasData = true;
-          if (ru->channels[0].next_ds[0]) audioQueued = true;
+          break;
         }
       }
 
@@ -3005,36 +3002,24 @@ void NJClient::on_new_interval()
       int lastSI = vs->last_played_sender_interval;
 
       if (!audioHasData) {
-        // Audio not playing yet — hold video
         SYNCLOG("SWAP#%d video HOLD: key=%s sender=%d lastSI=%d frames=%d (no audio)", m_sync_interval_cnt, vs->key, si, lastSI, vs->next.frameCount);
       } else if (si > 0 && lastSI >= 0 && si <= lastSI) {
         if (si < lastSI - 1) {
-          // Sender reset: sender_interval jumped backwards significantly.
-          // The sender reconnected and its counter restarted. Treat as new connection.
           SYNCLOG("SWAP#%d video SENDER-RESET: key=%s sender=%d lastSI=%d (resetting sync)", m_sync_interval_cnt, vs->key, si, lastSI);
           vs->last_played_sender_interval = -1;
-          // Don't play yet — next SWAP will do FIRST-HOLD then PLAY
         } else {
-          // Stale/duplicate: sender_interval same or 1 behind what we played.
           SYNCLOG("SWAP#%d video SKIP-STALE: key=%s sender=%d lastSI=%d (stale)", m_sync_interval_cnt, vs->key, si, lastSI);
           vs->next.reset();
         }
       } else if (si > 0 && lastSI <= 0) {
-        // First play: HOLD once. Audio END arrives AFTER the swap (2-SWAP delay),
-        // while video startPlaying fires BEFORE the swap (1-SWAP delay).
-        // Hold video 1 extra SWAP so both play data from the same sender interval.
-        // Set lastSI=si so next SWAP with si+1 plays as consecutive.
-        vs->last_played_sender_interval = si;
-        SYNCLOG("SWAP#%d video FIRST-HOLD: key=%s sender=%d setLastSI=%d (aligning: audio has 2-SWAP delay)", m_sync_interval_cnt, vs->key, si, si);
-        // Don't set last_played yet — we haven't played anything
+        vs->last_played_sender_interval = si - 1;
+        SYNCLOG("SWAP#%d video FIRST-PLAY: key=%s sender=%d setLastSI=%d", m_sync_interval_cnt, vs->key, si, si - 1);
       } else {
-      } else if (si > 0 && lastSI >= 0 && si > lastSI + 1) {
-        // Gap detected (missed intervals). Hold once to re-align with audio's 2-SWAP delay.
-        vs->last_played_sender_interval = si;
-        SYNCLOG("SWAP#%d video GAP-HOLD: key=%s sender=%d lastSI=%d gap=%d (re-aligning)", m_sync_interval_cnt, vs->key, si, lastSI, si - lastSI - 1);
-      } else {
-        // Normal PLAY: consecutive (si == lastSI+1)
-        SYNCLOG("SWAP#%d video PLAY: key=%s sender=%d lastSI=%d frames=%d aQ=%d", m_sync_interval_cnt, vs->key, si, lastSI, vs->next.frameCount, audioQueued ? 1 : 0);
+        if (si > lastSI + 1) {
+          SYNCLOG("SWAP#%d video PLAY-GAP: key=%s sender=%d lastSI=%d gap=%d frames=%d", m_sync_interval_cnt, vs->key, si, lastSI, si - lastSI - 1, vs->next.frameCount);
+        } else {
+          SYNCLOG("SWAP#%d video PLAY: key=%s sender=%d lastSI=%d frames=%d", m_sync_interval_cnt, vs->key, si, lastSI, vs->next.frameCount);
+        }
         vs->playing.reset();
         vs->playing.copyFrom(vs->next);
         vs->next.reset();
