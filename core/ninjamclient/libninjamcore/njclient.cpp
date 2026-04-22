@@ -3028,12 +3028,13 @@ void NJClient::on_new_interval()
         SYNCLOG("SWAP#%d video FIRST-HOLD: key=%s sender=%d setLastSI=%d (aligning: audio has 2-SWAP delay)", m_sync_interval_cnt, vs->key, si, si);
         // Don't set last_played yet — we haven't played anything
       } else {
-        // Normal PLAY: consecutive (si == lastSI+1), gap/catch-up (si > lastSI+1), or first play
-        if (si > 0 && lastSI >= 0 && si > lastSI + 1) {
-          SYNCLOG("SWAP#%d video PLAY-GAP: key=%s sender=%d lastSI=%d gap=%d frames=%d", m_sync_interval_cnt, vs->key, si, lastSI, si - lastSI - 1, vs->next.frameCount);
-        } else {
-          SYNCLOG("SWAP#%d video PLAY: key=%s sender=%d lastSI=%d frames=%d aQ=%d", m_sync_interval_cnt, vs->key, si, lastSI, vs->next.frameCount, audioQueued ? 1 : 0);
-        }
+      } else if (si > 0 && lastSI >= 0 && si > lastSI + 1) {
+        // Gap detected (missed intervals). Hold once to re-align with audio's 2-SWAP delay.
+        vs->last_played_sender_interval = si;
+        SYNCLOG("SWAP#%d video GAP-HOLD: key=%s sender=%d lastSI=%d gap=%d (re-aligning)", m_sync_interval_cnt, vs->key, si, lastSI, si - lastSI - 1);
+      } else {
+        // Normal PLAY: consecutive (si == lastSI+1)
+        SYNCLOG("SWAP#%d video PLAY: key=%s sender=%d lastSI=%d frames=%d aQ=%d", m_sync_interval_cnt, vs->key, si, lastSI, vs->next.frameCount, audioQueued ? 1 : 0);
         vs->playing.reset();
         vs->playing.copyFrom(vs->next);
         vs->next.reset();
