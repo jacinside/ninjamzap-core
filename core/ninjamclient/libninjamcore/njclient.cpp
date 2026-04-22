@@ -3000,20 +3000,36 @@ void NJClient::on_new_interval()
           if (ru->channels[0].next_ds[0]) audioQueued = true;
         }
       }
+
+      int si = vs->next.sender_interval;
+      int lastSI = vs->last_played_sender_interval;
+
       if (!audioHasData) {
-        SYNCLOG("SWAP#%d video HOLD: key=%s seq=%d sender=%d frames=%d", m_sync_interval_cnt, vs->key, vs->next.interval_seq, vs->next.sender_interval, vs->next.frameCount);
-      } else if (audioQueued && !vs->depth_aligned && vs->next.sender_interval > 0) {
-        // One-shot depth alignment: audio is 2-deep (ds + nds0) while video is 1-deep.
-        // HOLD video once to match audio's buffer depth. After this, both advance 1:1.
-        vs->depth_aligned = true;
-        SYNCLOG("SWAP#%d video DEPTH-HOLD: key=%s sender=%d (audio 2-deep, aligning)", m_sync_interval_cnt, vs->key, vs->next.sender_interval);
+        // Audio not playing yet — hold video
+        SYNCLOG("SWAP#%d video HOLD: key=%s sender=%d lastSI=%d frames=%d (no audio)", m_sync_interval_cnt, vs->key, si, lastSI, vs->next.frameCount);
+      } else if (si > 0 && lastSI >= 0 && si <= lastSI) {
+        // Stale/duplicate: sender_interval hasn't advanced past what we already played.
+        // Skip this video — it's old data (e.g., after network hiccup resend).
+        SYNCLOG("SWAP#%d video SKIP-STALE: key=%s sender=%d lastSI=%d (stale)", m_sync_interval_cnt, vs->key, si, lastSI);
+        vs->next.reset();
+      } else if (si > 0 && lastSI == -1 && audioQueued) {
+        // First play AND audio is 2-deep (ds + nds0): hold once to align depths.
+        // Next swap audio will advance to nds0, and video will play — both in sync.
+        SYNCLOG("SWAP#%d video DEPTH-HOLD: key=%s sender=%d (first play, audio 2-deep)", m_sync_interval_cnt, vs->key, si);
+        // Don't set last_played yet — we haven't played anything
       } else {
-        SYNCLOG("SWAP#%d video PLAY: key=%s seq=%d sender=%d frames=%d aQ=%d", m_sync_interval_cnt, vs->key, vs->next.interval_seq, vs->next.sender_interval, vs->next.frameCount, audioQueued ? 1 : 0);
+        // Normal PLAY: consecutive (si == lastSI+1), gap/catch-up (si > lastSI+1), or first play
+        if (si > 0 && lastSI >= 0 && si > lastSI + 1) {
+          SYNCLOG("SWAP#%d video PLAY-GAP: key=%s sender=%d lastSI=%d gap=%d frames=%d", m_sync_interval_cnt, vs->key, si, lastSI, si - lastSI - 1, vs->next.frameCount);
+        } else {
+          SYNCLOG("SWAP#%d video PLAY: key=%s sender=%d lastSI=%d frames=%d aQ=%d", m_sync_interval_cnt, vs->key, si, lastSI, vs->next.frameCount, audioQueued ? 1 : 0);
+        }
         vs->playing.reset();
         vs->playing.copyFrom(vs->next);
         vs->next.reset();
         vs->frame_idx = 0;
-        if (!vs->depth_aligned) vs->depth_aligned = true;
+        vs->empty_count = 0;
+        if (si > 0) vs->last_played_sender_interval = si;
       }
     } else if (vs->accumulating.active && vs->accumulating.frameCount >= 1) {
       // Fallback: startPlaying didn't fire (video data arrived late).
@@ -3024,7 +3040,8 @@ void NJClient::on_new_interval()
           if (ru->channels[0].ds) audioPlaying = true;
         }
       }
-      SYNCLOG("SWAP#%d video FALLBACK: key=%s seq=%d frames=%d audioPl=%d", m_sync_interval_cnt, vs->key, vs->accumulating.interval_seq, vs->accumulating.frameCount, audioPlaying);
+      int si = vs->accumulating.sender_interval;
+      SYNCLOG("SWAP#%d video FALLBACK: key=%s sender=%d lastSI=%d frames=%d audioPl=%d", m_sync_interval_cnt, vs->key, si, vs->last_played_sender_interval, vs->accumulating.frameCount, audioPlaying);
       if (audioPlaying) {
         vs->playing.reset();
         vs->playing.copyFrom(vs->accumulating);
@@ -3035,10 +3052,19 @@ void NJClient::on_new_interval()
         vs->accumulating.frameOffsets.Resize(0);
         vs->accumulating.frameCount = 0;
         vs->frame_idx = 0;
+        vs->empty_count = 0;
+        if (si > 0) vs->last_played_sender_interval = si;
       }
     } else {
-      SYNCLOG("SWAP#%d video EMPTY: key=%s next.seq=%d next.fr=%d acc.seq=%d acc.fr=%d",
-        m_sync_interval_cnt, vs->key, vs->next.interval_seq, vs->next.frameCount, vs->accumulating.interval_seq, vs->accumulating.frameCount);
+      vs->empty_count++;
+      if (vs->empty_count >= 3 && vs->last_played_sender_interval >= 0) {
+        // Disconnect detection: 3+ consecutive empty swaps → reset sync state.
+        // Next time video arrives, it will re-do depth alignment if needed.
+        SYNCLOG("SWAP#%d video RESET-SYNC: key=%s lastSI=%d emptyCount=%d (disconnect detected)", m_sync_interval_cnt, vs->key, vs->last_played_sender_interval, vs->empty_count);
+        vs->last_played_sender_interval = -1;
+      }
+      SYNCLOG("SWAP#%d video EMPTY: key=%s emptyCount=%d lastSI=%d",
+        m_sync_interval_cnt, vs->key, vs->empty_count, vs->last_played_sender_interval);
     }
   }
   m_video_recv_cs.Leave();

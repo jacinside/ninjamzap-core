@@ -384,8 +384,9 @@ protected:
     char stream_username[256];
     int stream_chidx;
     char key[280]; // "username:chidx"
-    bool depth_aligned; // one-shot: held once at connect when audio is 2-deep
-    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false), stream_chidx(0), depth_aligned(false) {
+    int last_played_sender_interval; // continuous sync: last sender_interval we PLAYed (-1 = none yet)
+    int empty_count;                 // consecutive EMPTY swaps (reset correction after disconnect)
+    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false), stream_chidx(0), last_played_sender_interval(-1), empty_count(0) {
       memset(append_guid, 0, 16); key[0] = 0; stream_username[0] = 0;
     }
   };
