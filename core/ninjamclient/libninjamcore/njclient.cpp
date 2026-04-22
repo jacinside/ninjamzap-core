@@ -3020,10 +3020,12 @@ void NJClient::on_new_interval()
           vs->next.reset();
         }
       } else if (si > 0 && lastSI <= 0) {
-        // First play after connect/reset: play immediately, no hold.
-        // Both audio and video have 1-SWAP delay, so they're naturally aligned.
-        vs->last_played_sender_interval = si - 1; // so this SWAP plays as consecutive
-        SYNCLOG("SWAP#%d video FIRST-PLAY: key=%s sender=%d setLastSI=%d (no hold, natural alignment)", m_sync_interval_cnt, vs->key, si, si - 1);
+        // First play: HOLD once. Audio END arrives AFTER the swap (2-SWAP delay),
+        // while video startPlaying fires BEFORE the swap (1-SWAP delay).
+        // Hold video 1 extra SWAP so both play data from the same sender interval.
+        // Set lastSI=si so next SWAP with si+1 plays as consecutive.
+        vs->last_played_sender_interval = si;
+        SYNCLOG("SWAP#%d video FIRST-HOLD: key=%s sender=%d setLastSI=%d (aligning: audio has 2-SWAP delay)", m_sync_interval_cnt, vs->key, si, si);
         // Don't set last_played yet — we haven't played anything
       } else {
         // Normal PLAY: consecutive (si == lastSI+1), gap/catch-up (si > lastSI+1), or first play
