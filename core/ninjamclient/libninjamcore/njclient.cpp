@@ -3008,14 +3008,22 @@ void NJClient::on_new_interval()
         // Audio not playing yet — hold video
         SYNCLOG("SWAP#%d video HOLD: key=%s sender=%d lastSI=%d frames=%d (no audio)", m_sync_interval_cnt, vs->key, si, lastSI, vs->next.frameCount);
       } else if (si > 0 && lastSI >= 0 && si <= lastSI) {
-        // Stale/duplicate: sender_interval hasn't advanced past what we already played.
-        // Skip this video — it's old data (e.g., after network hiccup resend).
-        SYNCLOG("SWAP#%d video SKIP-STALE: key=%s sender=%d lastSI=%d (stale)", m_sync_interval_cnt, vs->key, si, lastSI);
-        vs->next.reset();
-      } else if (si > 0 && lastSI == -1 && audioQueued) {
-        // First play AND audio is 2-deep (ds + nds0): hold once to align depths.
-        // Next swap audio will advance to nds0, and video will play — both in sync.
-        SYNCLOG("SWAP#%d video DEPTH-HOLD: key=%s sender=%d (first play, audio 2-deep)", m_sync_interval_cnt, vs->key, si);
+        if (si < lastSI - 1) {
+          // Sender reset: sender_interval jumped backwards significantly.
+          // The sender reconnected and its counter restarted. Treat as new connection.
+          SYNCLOG("SWAP#%d video SENDER-RESET: key=%s sender=%d lastSI=%d (resetting sync)", m_sync_interval_cnt, vs->key, si, lastSI);
+          vs->last_played_sender_interval = -1;
+          // Don't play yet — next SWAP will do FIRST-HOLD then PLAY
+        } else {
+          // Stale/duplicate: sender_interval same or 1 behind what we played.
+          SYNCLOG("SWAP#%d video SKIP-STALE: key=%s sender=%d lastSI=%d (stale)", m_sync_interval_cnt, vs->key, si, lastSI);
+          vs->next.reset();
+        }
+      } else if (si > 0 && lastSI <= 0) {
+        // First play after connect/reset: play immediately, no hold.
+        // Both audio and video have 1-SWAP delay, so they're naturally aligned.
+        vs->last_played_sender_interval = si - 1; // so this SWAP plays as consecutive
+        SYNCLOG("SWAP#%d video FIRST-PLAY: key=%s sender=%d setLastSI=%d (no hold, natural alignment)", m_sync_interval_cnt, vs->key, si, si - 1);
         // Don't set last_played yet — we haven't played anything
       } else {
         // Normal PLAY: consecutive (si == lastSI+1), gap/catch-up (si > lastSI+1), or first play
