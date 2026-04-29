@@ -351,10 +351,10 @@ protected:
     unsigned int fourcc;
     int chidx;
     int interval_seq; // receiver's interval counter at BEGIN time
-    int sender_interval; // sender's interval counter (read from marker chunk, -1=no marker)
+    unsigned char audio_guid[16]; // sender's audio ch0 GUID for this interval (from marker chunk, zero=no marker)
     bool active;
-    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), interval_seq(-1), sender_interval(-1), active(false) { username[0] = 0; memset(guid, 0, 16); }
-    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; interval_seq = -1; sender_interval = -1; active = false; username[0] = 0; memset(guid, 0, 16); }
+    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), interval_seq(-1), active(false) { username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
+    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; interval_seq = -1; active = false; username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
     void copyFrom(const VideoRecvBuffer &src) {
       fourcc = src.fourcc; chidx = src.chidx; active = src.active; frameCount = src.frameCount;
       memcpy(username, src.username, sizeof(username));
@@ -365,7 +365,7 @@ protected:
       frameOffsets.Resize(src.frameCount, false);
       if (src.frameCount > 0) memcpy(frameOffsets.Get(), src.frameOffsets.Get(), src.frameCount * sizeof(int));
       interval_seq = src.interval_seq;
-      sender_interval = src.sender_interval;
+      memcpy(audio_guid, src.audio_guid, 16);
     }
   };
 
@@ -384,9 +384,9 @@ protected:
     char stream_username[256];
     int stream_chidx;
     char key[280]; // "username:chidx"
-    int last_played_sender_interval; // continuous sync: last sender_interval we PLAYed (-1 = none yet)
-    int empty_count;                 // consecutive EMPTY swaps (reset correction after disconnect)
-    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false), stream_chidx(0), last_played_sender_interval(-1), empty_count(0) {
+    bool first_hold_done;  // true after the initial one-swap hold has fired
+    int  empty_count;      // consecutive SWAPs with no video; reset triggers first_hold re-arm
+    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false), stream_chidx(0), first_hold_done(false), empty_count(0) {
       memset(append_guid, 0, 16); key[0] = 0; stream_username[0] = 0;
     }
   };
