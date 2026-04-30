@@ -392,7 +392,9 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetUserChannelState(
     float p = pan;
     int32_t m = mute ? 1 : 0;
     int32_t s = subscribed ? 1 : 0;
-    NinjamClient_setUserChannelState(client, user, channelIndex, &vol, &p, &m, &s);
+    // Solo not exposed through this JNI signature; pass nullptr (no-change). The
+    // iOS bridge added a `solo` parameter; Android JNI hasn't been updated yet.
+    NinjamClient_setUserChannelState(client, user, channelIndex, &vol, &p, &m, &s, nullptr);
 
     env->ReleaseStringUTFChars(username, user);
 }

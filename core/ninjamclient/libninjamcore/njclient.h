@@ -353,8 +353,13 @@ protected:
     int interval_seq; // receiver's interval counter at BEGIN time
     unsigned char audio_guid[16]; // sender's audio ch0 GUID for this interval (from marker chunk, zero=no marker)
     bool active;
-    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), interval_seq(-1), active(false) { username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
-    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; interval_seq = -1; active = false; username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
+    // Multi-write reassembly: when a logical frame is split across raw-data WRITEs by the
+    // sender's MAX_ENC_BLOCKSIZE chunker, we accumulate bytes here until the frame is
+    // complete. `pending_remaining` is bytes still expected before the in-progress frame
+    // is finalized (frameCount++ happens at completion, not on every WRITE).
+    int pending_remaining;
+    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), interval_seq(-1), active(false), pending_remaining(0) { username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
+    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; interval_seq = -1; active = false; pending_remaining = 0; username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
     void copyFrom(const VideoRecvBuffer &src) {
       fourcc = src.fourcc; chidx = src.chidx; active = src.active; frameCount = src.frameCount;
       memcpy(username, src.username, sizeof(username));
@@ -366,6 +371,7 @@ protected:
       if (src.frameCount > 0) memcpy(frameOffsets.Get(), src.frameOffsets.Get(), src.frameCount * sizeof(int));
       interval_seq = src.interval_seq;
       memcpy(audio_guid, src.audio_guid, 16);
+      pending_remaining = src.pending_remaining;
     }
   };
 
@@ -384,10 +390,11 @@ protected:
     char stream_username[256];
     int stream_chidx;
     char key[280]; // "username:chidx"
-    bool first_hold_done;  // true after the initial one-swap hold has fired
-    int  empty_count;      // consecutive SWAPs with no video; reset triggers first_hold re-arm
-    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false), stream_chidx(0), first_hold_done(false), empty_count(0) {
-      memset(append_guid, 0, 16); key[0] = 0; stream_username[0] = 0;
+    int  empty_count;           // consecutive SWAPs with no video data
+    int  hold_count;            // consecutive SWAPs where GUID mismatch held video
+    unsigned char prev_ds_guid[16]; // ds->guid from the previous SWAP — video marker is 1 SWAP behind ds
+    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false), stream_chidx(0), empty_count(0), hold_count(0) {
+      memset(append_guid, 0, 16); key[0] = 0; stream_username[0] = 0; memset(prev_ds_guid, 0, 16);
     }
   };
 

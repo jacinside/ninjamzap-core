@@ -511,13 +511,6 @@ void NinjamClient_setLocalChannelVolume(NinjamClientRef* client, int channelInde
         adapter->setLocalChannelVolume(channelIndex, volume);
     }
 }
-const char* NinjamClient_getLocalUserName(NinjamClientRef* client) {
-    auto adapter = getAdapter(client);
-    if (adapter) {
-        return adapter->getLocalUserName();
-    }
-    return "";
-}
 
 const char* NinjamClient_getUserName(NinjamClientRef* client, int32_t index) {
     static const char* defaultName = "user";
