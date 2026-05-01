@@ -358,8 +358,9 @@ protected:
     // complete. `pending_remaining` is bytes still expected before the in-progress frame
     // is finalized (frameCount++ happens at completion, not on every WRITE).
     int pending_remaining;
-    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), interval_seq(-1), active(false), pending_remaining(0) { username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
-    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; interval_seq = -1; active = false; pending_remaining = 0; username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
+    int sender_seq; // sender's m_sync_interval_cnt for this interval (from 24B marker, -1=unknown)
+    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), interval_seq(-1), active(false), pending_remaining(0), sender_seq(-1) { username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
+    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; interval_seq = -1; active = false; pending_remaining = 0; sender_seq = -1; username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
     void copyFrom(const VideoRecvBuffer &src) {
       fourcc = src.fourcc; chidx = src.chidx; active = src.active; frameCount = src.frameCount;
       memcpy(username, src.username, sizeof(username));
@@ -372,18 +373,26 @@ protected:
       interval_seq = src.interval_seq;
       memcpy(audio_guid, src.audio_guid, 16);
       pending_remaining = src.pending_remaining;
+      sender_seq = src.sender_seq;
     }
   };
 
-  // Per-user video receive state
+  // Per-user video receive state.
+  // Pipeline: accumulating (during interval download) → next (after start/END) →
+  // pending (1-swap defer to align with audio output) → playing. The pending slot adds
+  // exactly one swap of latency so the video's first frame appears at the same moment
+  // the matching audio becomes audible (audio's natural decoder/output-buffer lag is
+  // ~1 interval). Going to 2 slots overshoots by one interval ("video se ve tarde").
   struct VideoRecvState {
     VideoRecvBuffer accumulating;
     VideoRecvBuffer next;
+    VideoRecvBuffer pending; // matched at SWAP N, moves to playing at SWAP N+1
     VideoRecvBuffer playing;
     int frame_idx;
     int expected_frames;
     bool append_active;
     bool append_to_next;
+    bool append_to_pending; // routing for late WRITEs when video is held in `pending` waiting for SWAP+1 promote
     unsigned char append_guid[16];
     // Stable identifiers — set at creation, never reset. accumulating's username/chidx
     // can be cleared by reset(), so we can't rely on those for stream lookup.
@@ -393,8 +402,14 @@ protected:
     int  empty_count;           // consecutive SWAPs with no video data
     int  hold_count;            // consecutive SWAPs where GUID mismatch held video
     unsigned char prev_ds_guid[16]; // ds->guid from the previous SWAP — video marker is 1 SWAP behind ds
-    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false), stream_chidx(0), empty_count(0), hold_count(0) {
+    bool synced;                // true once we have aligned at least once via DS or PREV match
+    int  last_played_sender_seq; // sender_seq of the last interval we played (-1 if never)
+    unsigned char last_played_audio_guid[16]; // audio_guid of the last interval we played
+    int  drop_resync_count;     // diagnostic: number of force-resyncs (HOLD cap exceeded)
+    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false), append_to_pending(false), stream_chidx(0),
+                       empty_count(0), hold_count(0), synced(false), last_played_sender_seq(-1), drop_resync_count(0) {
       memset(append_guid, 0, 16); key[0] = 0; stream_username[0] = 0; memset(prev_ds_guid, 0, 16);
+      memset(last_played_audio_guid, 0, 16);
     }
   };
 

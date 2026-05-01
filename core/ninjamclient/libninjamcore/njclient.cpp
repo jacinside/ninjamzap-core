@@ -29,19 +29,16 @@
 #include "njclient.h"
 #include "mpb.h"
 
-// Video sync debug logging
+// Video sync debug logging. On iOS routes via synclog_emit_oslog (defined in
+// LoggerBridge.mm) which calls os_log with %{public}s — visible in Console.app
+// without Apple's privacy masking. On other platforms falls back to stderr.
+// No file mirror — read live from Console.
 #define SYNCLOG_ENABLED 1
-#if SYNCLOG_ENABLED
-static FILE *_synclog_fp = NULL;
-static void synclog_write(const char *msg) {
-  if (!_synclog_fp) {
-    // Try /tmp first (works on simulator), fall back to stderr
-    _synclog_fp = fopen("/tmp/ninjam_sync.log", "w");
-    if (!_synclog_fp) _synclog_fp = stderr;
-  }
-  if (_synclog_fp) { fputs(msg, _synclog_fp); fputc('\n', _synclog_fp); fflush(_synclog_fp); }
-}
-#define SYNCLOG(...) do { char _b[512]; snprintf(_b,sizeof(_b),__VA_ARGS__); synclog_write(_b); } while(0)
+#if SYNCLOG_ENABLED && defined(__APPLE__)
+extern "C" void synclog_emit_oslog(const char *msg);
+#define SYNCLOG(...) do { char _b[512]; snprintf(_b,sizeof(_b),"[SYNCLOG] " __VA_ARGS__); synclog_emit_oslog(_b); } while(0)
+#elif SYNCLOG_ENABLED
+#define SYNCLOG(...) do { fprintf(stderr, "[SYNCLOG] " __VA_ARGS__); fputc('\n', stderr); } while(0)
 #else
 #define SYNCLOG(...) ((void)0)
 #endif
@@ -1297,6 +1294,28 @@ int NJClient::Run() // nonzero if sleep ok
                       if (!theuser->chanpresentmask) // user no longer exists, it seems
                       {
                         chksolo=1;
+                        // Reset any video sync state tied to this username so a future
+                        // reconnect (or a different user reusing the slot) starts clean.
+                        // Without this, prev_ds_guid / hold_count / synced lingered and
+                        // caused spurious PREV matches and "video earlier than audio".
+                        m_video_recv_cs.Enter();
+                        for (int vi = 0; vi < m_video_streams.GetSize(); vi++) {
+                          VideoRecvState *vs = m_video_streams.Get(vi);
+                          if (vs && !strcmp(vs->stream_username, theuser->name.Get())) {
+                            SYNCLOG("USER-LEAVE video state reset: key=%s wasSynced=%d lastSeq=%d",
+                              vs->key, vs->synced ? 1 : 0, vs->last_played_sender_seq);
+                            memset(vs->prev_ds_guid, 0, 16);
+                            memset(vs->last_played_audio_guid, 0, 16);
+                            vs->hold_count = 0;
+                            vs->empty_count = 0;
+                            vs->synced = false;
+                            vs->last_played_sender_seq = -1;
+                            vs->next.reset();
+                            vs->pending.reset();
+                            vs->accumulating.reset();
+                          }
+                        }
+                        m_video_recv_cs.Leave();
                         delete theuser;
                         m_remoteusers.Delete(x);
                       }
@@ -1441,13 +1460,23 @@ int NJClient::Run() // nonzero if sleep ok
                       VideoRecvBuffer *target = NULL;
                       bool targetIsAccumulating = false;
                       if (appending) {
-                        target = vs->append_to_next ? &vs->next : &vs->playing;
+                        if (vs->append_to_pending) target = &vs->pending;
+                        else if (vs->append_to_next) target = &vs->next;
+                        else target = &vs->playing;
                       } else if (vs->playing.active && !memcmp(vs->playing.guid, diw.guid, 16)) {
                         // Late WRITE for the currently playing interval — append as late frame.
                         target = &vs->playing;
                         memcpy(vs->append_guid, diw.guid, 16);
                         vs->append_active = true;
                         vs->append_to_next = false;
+                        vs->append_to_pending = false;
+                      } else if (vs->pending.active && !memcmp(vs->pending.guid, diw.guid, 16)) {
+                        // Late WRITE for an interval matched at last SWAP, held in pending.
+                        target = &vs->pending;
+                        memcpy(vs->append_guid, diw.guid, 16);
+                        vs->append_active = true;
+                        vs->append_to_next = false;
+                        vs->append_to_pending = true;
                       } else if (vs->accumulating.active && !memcmp(vs->accumulating.guid, diw.guid, 16)) {
                         target = &vs->accumulating;
                         targetIsAccumulating = true;
@@ -1502,10 +1531,13 @@ int NJClient::Run() // nonzero if sleep ok
                               if (frameSize == 24) {
                                 memcpy(vs->accumulating.audio_guid, m + 8, 16);
                                 unsigned int senderSwap = ((unsigned int)m[4] << 24) | ((unsigned int)m[5] << 16) | ((unsigned int)m[6] << 8) | m[7];
+                                vs->accumulating.sender_seq = (int)senderSwap;
                                 SYNCLOG("RECV video marker: key=%s senderSwap=%u audioGuid=%02x%02x localSwap=%d",
                                   vs->key, senderSwap, m[8], m[9], m_sync_interval_cnt);
                               } else if (frameSize == 8) {
                                 memset(vs->accumulating.audio_guid, 0, 16);
+                                unsigned int senderSwap = ((unsigned int)m[4] << 24) | ((unsigned int)m[5] << 16) | ((unsigned int)m[6] << 8) | m[7];
+                                vs->accumulating.sender_seq = (int)senderSwap;
                               }
                             }
 
@@ -1516,6 +1548,7 @@ int NJClient::Run() // nonzero if sleep ok
                               memcpy(vs->append_guid, vs->accumulating.guid, 16);
                               vs->append_active = true;
                               vs->append_to_next = true;
+                              vs->append_to_pending = false;
                               vs->accumulating.data.Resize(0);
                               vs->accumulating.frameOffsets.Resize(0);
                               vs->accumulating.frameCount = 0;
@@ -3050,8 +3083,22 @@ void NJClient::on_new_interval()
     VideoRecvState *vs = m_video_streams.Get(vi);
     if (!vs) continue;
 
+    // STAGE 1: Promote previously-matched video (pending → playing).
+    // Video that matched at swap N is held in pending and dispatches starting at swap
+    // N+1, adding the missing 1-interval delay so video first-frame appears at the
+    // moment its corresponding audio becomes audible (audio output buffering ~1 swap).
+    if (vs->pending.active && vs->pending.frameCount >= 1) {
+      SYNCLOG("SWAP#%d video PROMOTE: key=%s frames=%d vidSeq=%d",
+        m_sync_interval_cnt, vs->key, vs->pending.frameCount, vs->pending.sender_seq);
+      vs->playing.reset();
+      vs->playing.copyFrom(vs->pending);
+      vs->pending.reset();
+      vs->frame_idx = 0;
+    }
+
     vs->append_active = false;
     vs->append_to_next = false;
+    vs->append_to_pending = false;
     memset(vs->append_guid, 0, 16);
 
     // Note: stale check on interval_seq was removed. Guid-based WRITE routing
@@ -3088,27 +3135,34 @@ void NJClient::on_new_interval()
         break;
       }
 
+      // HOLD cap: after this many consecutive mismatches, drop next instead of force-playing.
+      // Force-playing on mismatch was the primary cause of "video earlier than audio" — by the
+      // time we held 3 swaps, the video frame was already 3 intervals ahead of the eventual
+      // audio. Dropping a single video interval keeps every subsequent interval aligned.
+      const int kHoldCapDrop = 4;
+      int videoSenderSeq = vs->next.sender_seq;
       if (!audioHasData) {
         vs->hold_count = 0;
         vs->empty_count = 0;
-        SYNCLOG("SWAP#%d video HOLD: key=%s (no audio)", m_sync_interval_cnt, vs->key);
+        SYNCLOG("SWAP#%d video HOLD: key=%s (no audio) vidSeq=%d", m_sync_interval_cnt, vs->key, videoSenderSeq);
       } else if (hasGuid && !guidMatch) {
         vs->hold_count++;
         vs->empty_count = 0;
-        if (vs->hold_count >= 3) {
-          SYNCLOG("SWAP#%d video PLAY-FALLBACK: key=%s holdCount=%d seq=%d ds=%02x%02x prev=%02x%02x vid=%02x%02x frames=%d",
-            m_sync_interval_cnt, vs->key, vs->hold_count, vs->next.interval_seq,
+        if (vs->hold_count >= kHoldCapDrop) {
+          // Resync: drop queued video, mark unsynced. We will re-establish alignment on the
+          // next BEGIN/marker. Better one missed interval than persistent drift.
+          vs->drop_resync_count++;
+          SYNCLOG("SWAP#%d video DROP-RESYNC: key=%s holdCount=%d vidSeq=%d ds=%02x%02x prev=%02x%02x vid=%02x%02x frames=%d totalDrops=%d",
+            m_sync_interval_cnt, vs->key, vs->hold_count, videoSenderSeq,
             senderDs->guid[0], senderDs->guid[1],
             vs->prev_ds_guid[0], vs->prev_ds_guid[1],
-            videoAudioGuid[0], videoAudioGuid[1], vs->next.frameCount);
-          vs->playing.reset();
-          vs->playing.copyFrom(vs->next);
+            videoAudioGuid[0], videoAudioGuid[1], vs->next.frameCount, vs->drop_resync_count);
           vs->next.reset();
-          vs->frame_idx = 0;
           vs->hold_count = 0;
+          vs->synced = false;
         } else {
-          SYNCLOG("SWAP#%d video HOLD: key=%s holdCount=%d seq=%d ds=%02x%02x prev=%02x%02x vid=%02x%02x",
-            m_sync_interval_cnt, vs->key, vs->hold_count, vs->next.interval_seq,
+          SYNCLOG("SWAP#%d video HOLD: key=%s holdCount=%d vidSeq=%d ds=%02x%02x prev=%02x%02x vid=%02x%02x",
+            m_sync_interval_cnt, vs->key, vs->hold_count, videoSenderSeq,
             senderDs->guid[0], senderDs->guid[1],
             vs->prev_ds_guid[0], vs->prev_ds_guid[1],
             videoAudioGuid[0], videoAudioGuid[1]);
@@ -3116,20 +3170,53 @@ void NJClient::on_new_interval()
       } else {
         vs->hold_count = 0;
         vs->empty_count = 0;
-        SYNCLOG("SWAP#%d video PLAY: key=%s match=%s seq=%d frames=%d ds=%02x%02x prev=%02x%02x vid=%02x%02x",
+        // Successful match — record canonical sync point so future SWAPs can detect drift.
+        vs->synced = true;
+        vs->last_played_sender_seq = videoSenderSeq;
+        memcpy(vs->last_played_audio_guid, videoAudioGuid, 16);
+        // Adaptive defer based on match type:
+        //   DS match: marker.audioGuid == senderDs->guid → that audio is in the decoder
+        //             pipeline NOW but only audible during [SWAP+1, SWAP+2] due to the
+        //             output buffer. So defer video 1 swap into pending → visible at the
+        //             same time as the audio reaches the speaker. ALIGNED.
+        //   PREV match: marker.audioGuid == prev_ds_guid → that audio was already
+        //               audible during [SWAP-1, SWAP] and is now in the output buffer
+        //               finishing playback during [SWAP, SWAP+1]. Play video NOW (no
+        //               defer) so video covers the same [SWAP, SWAP+1] window. ALIGNED.
+        //   NONE match: rare (legacy 4-byte marker / no audioGuid). Play immediately as
+        //               a best-effort fallback.
+        bool defer = (matchType == 1); // only DS match needs the 1-swap defer
+        SYNCLOG("SWAP#%d video PLAY: key=%s match=%s vidSeq=%d frames=%d ds=%02x%02x prev=%02x%02x vid=%02x%02x (%s)",
           m_sync_interval_cnt, vs->key, matchType == 1 ? "DS" : matchType == 2 ? "PREV" : "NONE",
-          vs->next.interval_seq, vs->next.frameCount,
+          videoSenderSeq, vs->next.frameCount,
           senderDs ? senderDs->guid[0] : 0, senderDs ? senderDs->guid[1] : 0,
           vs->prev_ds_guid[0], vs->prev_ds_guid[1],
-          videoAudioGuid[0], videoAudioGuid[1]);
-        vs->playing.reset();
-        vs->playing.copyFrom(vs->next);
+          videoAudioGuid[0], videoAudioGuid[1],
+          defer ? "deferred → pending" : "immediate → playing");
+        if (defer) {
+          // DS path: hold one swap in pending. Late WRITEs for this interval need to
+          // continue accumulating into pending too (otherwise they'd be dropped).
+          vs->pending.reset();
+          vs->pending.copyFrom(vs->next);
+          memcpy(vs->append_guid, vs->pending.guid, 16);
+          vs->append_active = true;
+          vs->append_to_next = false;
+          vs->append_to_pending = true;
+        } else {
+          // PREV/NONE path: play immediately (audio's already heading out the speaker).
+          vs->playing.reset();
+          vs->playing.copyFrom(vs->next);
+          vs->frame_idx = 0;
+        }
         vs->next.reset();
-        vs->frame_idx = 0;
       }
       if (senderDs) memcpy(vs->prev_ds_guid, senderDs->guid, 16);
       else memset(vs->prev_ds_guid, 0, 16);
     } else if (vs->accumulating.active && vs->accumulating.frameCount >= 1) {
+      // Accumulating-fallback only fires when next is empty but accumulating already has
+      // frames before END arrives. This path bypasses the GUID match and so can introduce
+      // drift if used too aggressively. Require an established sync (vs->synced) to avoid
+      // playing video earlier than its corresponding audio.
       bool audioPlaying = false;
       for (int ui = 0; ui < m_remoteusers.GetSize() && !audioPlaying; ui++) {
         RemoteUser *ru = m_remoteusers.Get(ui);
@@ -3137,7 +3224,7 @@ void NJClient::on_new_interval()
           if (ru->channels[0].ds) audioPlaying = true;
         }
       }
-      if (audioPlaying) {
+      if (audioPlaying && vs->synced) {
         vs->hold_count = 0;
         vs->empty_count = 0;
         SYNCLOG("SWAP#%d video FALLBACK: key=%s frames=%d", m_sync_interval_cnt, vs->key, vs->accumulating.frameCount);
@@ -3146,12 +3233,14 @@ void NJClient::on_new_interval()
         memcpy(vs->append_guid, vs->accumulating.guid, 16);
         vs->append_active = true;
         vs->append_to_next = false;
+        vs->append_to_pending = false;
         vs->accumulating.data.Resize(0);
         vs->accumulating.frameOffsets.Resize(0);
         vs->accumulating.frameCount = 0;
         vs->frame_idx = 0;
       } else {
-        SYNCLOG("SWAP#%d video FALLBACK-HOLD: key=%s (no audio)", m_sync_interval_cnt, vs->key);
+        SYNCLOG("SWAP#%d video FALLBACK-HOLD: key=%s audioPlaying=%d synced=%d",
+          m_sync_interval_cnt, vs->key, audioPlaying ? 1 : 0, vs->synced ? 1 : 0);
       }
     } else {
       vs->hold_count = 0;

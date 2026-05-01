@@ -40,8 +40,8 @@
 #define OV_EXCLUDE_STATIC_CALLBACKS
 #endif
 
-#ifdef __ANDROID__
-  // Android: vorbis headers provided via system include path or NDK build
+#if defined(__ANDROID__) || defined(NINJAMCORE_HOST_BUILD)
+  // Android / host integration tests: vorbis headers from system include path.
   #ifndef NINJAM_NO_VORBIS
     #include <vorbis/vorbisenc.h>
     #include <vorbis/codec.h>
