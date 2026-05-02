@@ -793,29 +793,3 @@ void NinjamClientAdapter::setIntervalSwapCallback(std::function<void()> callback
     }
 }
 
-void NinjamClientAdapter::setVideoFrameReadyCallback(NJClient::VideoFrameReadyCallback callback) {
-    if (client && client->gsNjClient()) {
-        client->gsNjClient()->VideoFrameReady_Callback = callback;
-        client->gsNjClient()->VideoFrameReady_User = this;
-    }
-}
-
-void NinjamClientAdapter::setVideoChannel(int chidx, unsigned int fourcc) {
-    if (!client) return;
-    client->gsNjClient()->SetVideoChannel(chidx, fourcc);
-}
-
-void NinjamClientAdapter::stopVideoChannel() {
-    if (!client) return;
-    client->gsNjClient()->StopVideoChannel();
-}
-
-void NinjamClientAdapter::queueVideoFrame(const void *data, int len) {
-    if (!client) return;
-    client->gsNjClient()->QueueVideoFrame(data, len);
-}
-
-void NinjamClientAdapter::setVideoSPSPPS(const void *data, int len) {
-    if (!client) return;
-    client->gsNjClient()->SetVideoSPSPPS(data, len);
-}
