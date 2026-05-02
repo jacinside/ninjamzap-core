@@ -472,13 +472,13 @@ public:
 
 
 #define MIN_ENC_BLOCKSIZE 2048
-// Reverted 2026-04-30 back to original 9216 because the upstream NINJAM server kicks clients
-// whose `mpb_client_upload_interval_write` payloads exceed this — disconnects with reason -3.
-// iOS 26 H.264 IDRs (12–17 KB) still get fragmented into multiple writes here, and the
-// receiver below treats each WRITE as a separate frame (frameCount++ per write), which
-// breaks decoding of large IDRs. Real fix is RX-side reassembly (TODO: see project memory
-// `ios26-multinal-video-fix.md`); short-term mitigations are lowering video bitrate or
-// keyframe interval so IDRs stay under 9216.
+// Reverted to original 9216: upstream NINJAM servers kick clients whose
+// `mpb_client_upload_interval_write` payloads exceed this (disconnect with reason -3).
+// iOS 26 H.264 IDRs (12–17 KB) still get fragmented across multiple writes here, and
+// the receiver treats each WRITE as a separate frame (frameCount++ per write), which
+// breaks decoding of large IDRs. Proper fix: RX-side reassembly. Short-term
+// mitigations: lower video bitrate or shorten keyframe interval so IDRs stay under
+// MAX_ENC_BLOCKSIZE.
 #define MAX_ENC_BLOCKSIZE (8192+1024)
 #define DEFAULT_CONFIG_PREBUFFER  8192
 #define LIVE_PREBUFFER 128

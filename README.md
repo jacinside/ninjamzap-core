@@ -39,8 +39,29 @@ ninjamzap-core/
 
 ## Status
 
-- **iOS**: Fully implemented
-- **Android**: Planned (C++ core is ready, JNI wrapper needed)
+- **iOS**: Fully implemented (Obj-C++/Swift bridge, AVAudioEngine integration).
+- **Android**: JNI bridge + Oboe full-duplex callback in place; cross-compiled
+  Vorbis libraries are the remaining build dependency.
+
+---
+
+## Video Extension
+
+NinjamZap adds **real-time video** alongside audio while staying on the standard
+NINJAM interval-based protocol. Highlights:
+
+- Video frames travel as additional channels carrying compressed payloads,
+  identified by a four-character code (`H264`, `VP8`, `MJPG`).
+- Audio is **never** disturbed: the matching server fork relays audio first
+  in a two-pass loop and drops video frames for slow subscribers if needed.
+- Any standard NINJAM client (Jamtaba, REAPER plugin, original NINJAM client)
+  can join a NinjamZap room for **audio normally** — they simply don't see the
+  video channels.
+- The matching server fork (with two-pass audio prioritization, congestion
+  control, and per-room threading) lives at
+  [ninjamzap-server](https://github.com/jacinside/ninjamzap-server).
+
+A protocol overview lives in [`docs/`](docs/) (work in progress).
 
 ---
 
