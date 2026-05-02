@@ -1,0 +1,5 @@
+build/
+video_sync_tests
+
+# Un-ignore fixture log files (root .gitignore excludes *.log globally)
+!fixtures/*.log

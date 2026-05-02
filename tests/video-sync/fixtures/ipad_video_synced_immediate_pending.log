@@ -1,0 +1,116 @@
+[SYNCLOG] video BEGIN: key=iPad:1 interval=6 seq=6 next.active=0
+[SYNCLOG] RECV video marker: key=iPad:1 senderSwap=6 audioGuid=8ba2 localSwap=6
+[SYNCLOG]  video startPlaying: key=iPad:1 frames=1
+[SYNCLOG] audio END: user=iPad ch=0 slot=0 swapCnt=6
+[SYNCLOG] SWAP#7 audio: user=iPad ds=Y nds0=N nds1=N
+[SYNCLOG] SEND video marker: swap=7 audioGuid=8d82
+[SYNCLOG] SWAP#7 video PLAY: key=iPad:1 match=PREV vidSeq=6 frames=69 ds=2753 prev=8ba2 vid=8ba2 (immediate → playing)
+[SYNCLOG] video BEGIN: key=iPad:1 interval=7 seq=7 next.active=0
+[SYNCLOG] RECV video marker: key=iPad:1 senderSwap=7 audioGuid=2753 localSwap=7
+[SYNCLOG]  video startPlaying: key=iPad:1 frames=1
+[SYNCLOG] audio END: user=iPad ch=0 slot=0 swapCnt=7
+[SYNCLOG] SWAP#8 audio: user=iPad ds=Y nds0=N nds1=N
+[SYNCLOG] SEND video marker: swap=8 audioGuid=3400
+[SYNCLOG] SWAP#8 video PLAY: key=iPad:1 match=PREV vidSeq=7 frames=69 ds=de96 prev=2753 vid=2753 (immediate → playing)
+[SYNCLOG] video BEGIN: key=iPad:1 interval=8 seq=8 next.active=0
+[SYNCLOG] RECV video marker: key=iPad:1 senderSwap=8 audioGuid=de96 localSwap=8
+[SYNCLOG]  video startPlaying: key=iPad:1 frames=1
+[SYNCLOG] audio END: user=iPad ch=0 slot=0 swapCnt=8
+[SYNCLOG] SWAP#9 audio: user=iPad ds=Y nds0=N nds1=N
+[SYNCLOG] SEND video marker: swap=9 audioGuid=1508
+[SYNCLOG] SWAP#9 video PLAY: key=iPad:1 match=PREV vidSeq=8 frames=69 ds=7792 prev=de96 vid=de96 (immediate → playing)
+[SYNCLOG] SWAP#1 audio: user=iPad ds=N nds0=N nds1=N
+[SYNCLOG] audio END: user=iPad ch=0 slot=0 swapCnt=1
+[SYNCLOG] video BEGIN: key=iPad:1 interval=1 seq=1 next.active=0
+[SYNCLOG] RECV video marker: key=iPad:1 senderSwap=10 audioGuid=be25 localSwap=1
+[SYNCLOG]  video startPlaying: key=iPad:1 frames=1
+[SYNCLOG] SWAP#2 audio: user=iPad ds=Y nds0=N nds1=N
+[SYNCLOG] SEND video marker: swap=2 audioGuid=0000
+[SYNCLOG] SWAP#2 video PLAY: key=iPad:1 match=DS vidSeq=10 frames=53 ds=be25 prev=0000 vid=be25 (deferred → pending)
+[SYNCLOG] audio END: user=iPad ch=0 slot=0 swapCnt=2
+[SYNCLOG] video BEGIN: key=iPad:1 interval=2 seq=2 next.active=0
+[SYNCLOG] RECV video marker: key=iPad:1 senderSwap=11 audioGuid=48af localSwap=2
+[SYNCLOG]  video startPlaying: key=iPad:1 frames=1
+[SYNCLOG] audio END: user=iPad ch=0 slot=1 swapCnt=2
+[SYNCLOG] SWAP#3 audio: user=iPad ds=Y nds0=Y nds1=N
+[SYNCLOG] SEND video marker: swap=3 audioGuid=fa6e
+[SYNCLOG] SWAP#3 video PROMOTE: key=iPad:1 frames=211 vidSeq=10
+[SYNCLOG] SWAP#3 video PLAY: key=iPad:1 match=DS vidSeq=11 frames=54 ds=48af prev=be25 vid=48af (deferred → pending)
+[SYNCLOG] video BEGIN: key=iPad:1 interval=3 seq=3 next.active=0
+[SYNCLOG] RECV video marker: key=iPad:1 senderSwap=12 audioGuid=5bf1 localSwap=3
+[SYNCLOG]  video startPlaying: key=iPad:1 frames=1
+[SYNCLOG] audio END: user=iPad ch=0 slot=1 swapCnt=3
+[SYNCLOG] SWAP#4 audio: user=iPad ds=Y nds0=Y nds1=N
+[SYNCLOG] SEND video marker: swap=4 audioGuid=87a6
+[SYNCLOG] SWAP#4 video PROMOTE: key=iPad:1 frames=211 vidSeq=11
+[SYNCLOG] SWAP#4 video PLAY: key=iPad:1 match=DS vidSeq=12 frames=54 ds=5bf1 prev=48af vid=5bf1 (deferred → pending)
+[SYNCLOG] video BEGIN: key=iPad:1 interval=4 seq=4 next.active=0
+[SYNCLOG] RECV video marker: key=iPad:1 senderSwap=13 audioGuid=a66d localSwap=4
+[SYNCLOG]  video startPlaying: key=iPad:1 frames=1
+[SYNCLOG] SWAP#5 audio: user=iPad ds=Y nds0=N nds1=N
+[SYNCLOG] SEND video marker: swap=5 audioGuid=ec0c
+[SYNCLOG] SWAP#5 video PROMOTE: key=iPad:1 frames=212 vidSeq=12
+[SYNCLOG] SWAP#5 video PLAY: key=iPad:1 match=DS vidSeq=13 frames=54 ds=a66d prev=5bf1 vid=a66d (deferred → pending)
+[SYNCLOG] audio END: user=iPad ch=0 slot=0 swapCnt=5
+[SYNCLOG] video BEGIN: key=iPad:1 interval=5 seq=5 next.active=0
+[SYNCLOG] RECV video marker: key=iPad:1 senderSwap=14 audioGuid=0eac localSwap=5
+[SYNCLOG]  video startPlaying: key=iPad:1 frames=1
+[SYNCLOG] SWAP#6 audio: user=iPad ds=Y nds0=N nds1=N
+[SYNCLOG] SEND video marker: swap=6 audioGuid=edd6
+[SYNCLOG] SWAP#6 video PROMOTE: key=iPad:1 frames=211 vidSeq=13
+[SYNCLOG] SWAP#6 video PLAY: key=iPad:1 match=DS vidSeq=14 frames=54 ds=0eac prev=a66d vid=0eac (deferred → pending)
+[SYNCLOG] audio END: user=iPad ch=0 slot=0 swapCnt=6
+[SYNCLOG] video BEGIN: key=iPad:1 interval=6 seq=6 next.active=0
+[SYNCLOG] RECV video marker: key=iPad:1 senderSwap=15 audioGuid=62b1 localSwap=6
+[SYNCLOG]  video startPlaying: key=iPad:1 frames=1
+[SYNCLOG] audio END: user=iPad ch=0 slot=1 swapCnt=6
+[SYNCLOG] SWAP#7 audio: user=iPad ds=Y nds0=Y nds1=N
+[SYNCLOG] SWAP#7 video PROMOTE: key=iPad:1 frames=212 vidSeq=14
+[SYNCLOG] SWAP#7 video PLAY: key=iPad:1 match=DS vidSeq=15 frames=53 ds=62b1 prev=0eac vid=62b1 (deferred → pending)
+[SYNCLOG] video BEGIN: key=iPad:1 interval=7 seq=7 next.active=0
+[SYNCLOG] RECV video marker: key=iPad:1 senderSwap=16 audioGuid=6d79 localSwap=7
+[SYNCLOG]  video startPlaying: key=iPad:1 frames=1
+[SYNCLOG] audio END: user=iPad ch=0 slot=1 swapCnt=7
+[SYNCLOG] SWAP#8 audio: user=iPad ds=Y nds0=Y nds1=N
+[SYNCLOG] SEND video marker: swap=8 audioGuid=6819
+[SYNCLOG] SWAP#8 video PROMOTE: key=iPad:1 frames=211 vidSeq=15
+[SYNCLOG] SWAP#8 video PLAY: key=iPad:1 match=DS vidSeq=16 frames=54 ds=6d79 prev=62b1 vid=6d79 (deferred → pending)
+[SYNCLOG] video BEGIN: key=iPad:1 interval=8 seq=8 next.active=0
+[SYNCLOG] RECV video marker: key=iPad:1 senderSwap=17 audioGuid=f0c7 localSwap=8
+[SYNCLOG]  video startPlaying: key=iPad:1 frames=1
+[SYNCLOG] SWAP#9 audio: user=iPad ds=Y nds0=N nds1=N
+[SYNCLOG] SEND video marker: swap=9 audioGuid=ec04
+[SYNCLOG] SWAP#9 video PROMOTE: key=iPad:1 frames=212 vidSeq=16
+[SYNCLOG] SWAP#9 video PLAY: key=iPad:1 match=DS vidSeq=17 frames=53 ds=f0c7 prev=6d79 vid=f0c7 (deferred → pending)
+[SYNCLOG] audio END: user=iPad ch=0 slot=0 swapCnt=9
+[SYNCLOG] video BEGIN: key=iPad:1 interval=9 seq=9 next.active=0
+[SYNCLOG] RECV video marker: key=iPad:1 senderSwap=18 audioGuid=5a47 localSwap=9
+[SYNCLOG]  video startPlaying: key=iPad:1 frames=1
+[SYNCLOG] audio END: user=iPad ch=0 slot=1 swapCnt=9
+[SYNCLOG] SWAP#10 audio: user=iPad ds=Y nds0=Y nds1=N
+[SYNCLOG] SEND video marker: swap=10 audioGuid=7123
+[SYNCLOG] SWAP#10 video PROMOTE: key=iPad:1 frames=211 vidSeq=17
+[SYNCLOG] SWAP#10 video PLAY: key=iPad:1 match=DS vidSeq=18 frames=54 ds=5a47 prev=f0c7 vid=5a47 (deferred → pending)
+[SYNCLOG] video BEGIN: key=iPad:1 interval=10 seq=10 next.active=0
+[SYNCLOG] RECV video marker: key=iPad:1 senderSwap=19 audioGuid=a54e localSwap=10
+[SYNCLOG]  video startPlaying: key=iPad:1 frames=1
+[SYNCLOG] SWAP#11 audio: user=iPad ds=Y nds0=N nds1=N
+[SYNCLOG] SEND video marker: swap=11 audioGuid=335c
+[SYNCLOG] SWAP#11 video PROMOTE: key=iPad:1 frames=212 vidSeq=18
+[SYNCLOG] SWAP#11 video PLAY: key=iPad:1 match=DS vidSeq=19 frames=53 ds=a54e prev=5a47 vid=a54e (deferred → pending)
+[SYNCLOG] audio END: user=iPad ch=0 slot=0 swapCnt=11
+[SYNCLOG] video BEGIN: key=iPad:1 interval=11 seq=11 next.active=0
+[SYNCLOG] RECV video marker: key=iPad:1 senderSwap=20 audioGuid=5c2f localSwap=11
+[SYNCLOG]  video startPlaying: key=iPad:1 frames=1
+[SYNCLOG] SWAP#12 audio: user=iPad ds=Y nds0=N nds1=N
+[SYNCLOG] SEND video marker: swap=12 audioGuid=5d82
+[SYNCLOG] SWAP#12 video PROMOTE: key=iPad:1 frames=211 vidSeq=19
+[SYNCLOG] SWAP#12 video PLAY: key=iPad:1 match=DS vidSeq=20 frames=54 ds=5c2f prev=a54e vid=5c2f (deferred → pending)
+[SYNCLOG] audio END: user=iPad ch=0 slot=0 swapCnt=12
+[SYNCLOG] video BEGIN: key=iPad:1 interval=12 seq=12 next.active=0
+[SYNCLOG] RECV video marker: key=iPad:1 senderSwap=21 audioGuid=234e localSwap=12
+[SYNCLOG]  video startPlaying: key=iPad:1 frames=1
+[SYNCLOG] SWAP#13 audio: user=iPad ds=Y nds0=N nds1=N
+[SYNCLOG] SEND video marker: swap=13 audioGuid=33e0
+[SYNCLOG] SWAP#13 video PROMOTE: key=iPad:1 frames=212 vidSeq=20
+[SYNCLOG] SWAP#13 video PLAY: key=iPad:1 match=DS vidSeq=21 frames=53 ds=234e prev=5c2f vid=234e (deferred → pending)

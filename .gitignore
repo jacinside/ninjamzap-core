@@ -33,6 +33,10 @@ Makefile
 *.cmake
 !CMakeLists.txt
 
+# Keep test harness Makefile and fixtures
+!tests/video-sync/Makefile
+!tests/video-sync/fixtures/
+
 # IDE files
 .vscode/
 .idea/
