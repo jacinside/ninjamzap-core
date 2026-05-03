@@ -97,6 +97,14 @@ public:
   // ready callback and want to inspect the raw stream.
   std::vector<RawDataRecord> drainRawData();
 
+  // Sends a NINJAM chat message. `type` is typically "MSG" for public chat.
+  // Use to send BPM/BPI votes: sendChatMessage("MSG", "!vote bpm 120").
+  void sendChatMessage(const char *type, const char *msg);
+
+  // Current BPM/BPI as reported by the server (via updateBPMinfo).
+  int getBPM() const;
+  int getBPI() const;
+
   // Snapshot of current m_sync_interval_cnt (read via reflection-ish: we expose it
   // through a tiny accessor we add to the wrapper since NJClient field is protected).
   int currentSwap() const { return currentSwap_.load(); }

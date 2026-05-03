@@ -166,6 +166,18 @@ std::vector<VideoFrameRecord> TestClient::drainVideoFrames() {
   return out;
 }
 
+void TestClient::sendChatMessage(const char *type, const char *msg) {
+  if (client_) client_->ChatMessage_Send(type, msg);
+}
+
+int TestClient::getBPM() const {
+  return client_ ? (int)client_->GetActualBPM() : 0;
+}
+
+int TestClient::getBPI() const {
+  return client_ ? client_->GetBPI() : 0;
+}
+
 std::vector<RawDataRecord> TestClient::drainRawData() {
   std::lock_guard<std::mutex> lk(rawMu_);
   std::vector<RawDataRecord> out(rawEvents_.begin(), rawEvents_.end());
