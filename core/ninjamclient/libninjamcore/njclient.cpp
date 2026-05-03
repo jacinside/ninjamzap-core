@@ -888,12 +888,17 @@ void NJClient::AudioProc(float **inbuf, int innch, float **outbuf, int outnch, i
     // Video frame delivery — per-user, expected-FPS pacing.
     if (VideoFrameReady_Callback && m_interval_length > 0)
     {
-      bool needMutex = false;
-      for (int vi = 0; vi < m_video_streams.GetSize(); vi++) {
-        VideoRecvState *vs = m_video_streams.Get(vi);
-        if (vs && vs->append_active && !vs->append_to_next) { needMutex = true; break; }
-      }
-      if (needMutex) m_video_recv_cs.Enter();
+      // Always hold m_video_recv_cs across the whole delivery loop. The
+      // previous conditional (only when some stream had append_active &&
+      // !append_to_next) was insufficient: even outside that window,
+      // RawData_Callback on the Run() thread can mutate vs->playing.data
+      // (e.g. END finalizing into playing, or WDL_HeapBuf realloc on
+      // append) between our bounds check and the callback's memcpy.
+      // Symptom: EXC_BAD_ACCESS in _platform_memmove from
+      // Data(bytes:count:) inside the Swift VideoFrameReady_Callback on
+      // iOS 26 (testflight crashes #13/#14). Holding the lock keeps the
+      // source bytes valid for the duration of the callback's copy.
+      m_video_recv_cs.Enter();
 
       for (int vi = 0; vi < m_video_streams.GetSize(); vi++)
       {
@@ -939,7 +944,7 @@ void NJClient::AudioProc(float **inbuf, int innch, float **outbuf, int outnch, i
         }
       }
 
-      if (needMutex) m_video_recv_cs.Leave();
+      m_video_recv_cs.Leave();
     }
 
     offs += x;
