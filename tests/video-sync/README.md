@@ -43,11 +43,15 @@ NJ_TEST_DEBUG=1 make test           # verbose SYNCLOG echo to stderr
 | `NJ_TEST_DROP_FRAME_KB` | 20 | 20 |
 | `NJ_TEST_COMBO_BPM` | 120 | 23 |
 | `NJ_TEST_COMBO_BPI` | 2 | 23 |
+| `NJ_TEST_BUF_NSENDERS` | 3 | 26 |
+| `NJ_TEST_BUF_FRAME_KB` | 50 | 26 |
+| `NJ_TEST_BUF_FPS` | 15 | 26 |
+| `NJ_TEST_BUF_SECONDS` | 6 | 26 |
 | `NJ_TEST_REPLAY_LOG` | — | 08 (log replay mode) |
 
 ## What's covered
 
-Twenty-three Catch2 scenarios under `scenarios/`:
+Twenty-six Catch2 scenarios under `scenarios/`:
 
 ### Core sync
 
@@ -63,7 +67,7 @@ Twenty-three Catch2 scenarios under `scenarios/`:
 | 08 | play_promote_invariant | PROMOTE fires exactly 1 swap after PLAY |
 | 09 | pause_resume_burst | Pause/resume cycles; no stuck state |
 
-### Topology
+### Topology & server limits
 
 | # | Scenario | Focus |
 |---|----------|-------|
@@ -71,6 +75,8 @@ Twenty-three Catch2 scenarios under `scenarios/`:
 | 12 | multi_client_hd_stress | N concurrent HD streams (server tuning knob) |
 | 20 | drop_resync_recovery | If DROP-RESYNC fires, receiver must re-sync |
 | 21 | video_only_sender | No audio → HOLD(no audio), never DROP-RESYNC |
+| 24 | server_max_users | All 8 slots fill; 9th client is rejected |
+| 26 | send_buffer_pressure | 3-sender relay saturation (~750 KB/s each) |
 
 ### Lifecycle
 
@@ -81,6 +87,7 @@ Twenty-three Catch2 scenarios under `scenarios/`:
 | 14 | receiver_reconnect | Receiver drop/reconnect while sender streams |
 | 15 | sparse_video | 1 frame/interval — floor frame-count check |
 | 22 | audio_then_video | Audio-only join, video enabled mid-session |
+| 25 | no_initial_spspps | Frames before SPS/PPS; sync must not break |
 
 ### BPM / BPI
 
