@@ -134,6 +134,7 @@ private:
   std::thread audioThread_;
   std::atomic<bool> stop_{false};
   std::atomic<bool> joined_{false};
+  std::atomic<bool> videoChannelRegistered_{false};
   std::atomic<int> currentSwap_{0};
   std::atomic<int> swapCallbackCount_{0};
 

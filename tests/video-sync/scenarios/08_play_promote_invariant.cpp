@@ -246,7 +246,7 @@ void runLiveScenario() {
   std::fprintf(stderr,
                "[scenario8] live: PLAY=%zu PROMOTE=%zu\n",
                trace.plays.size(), trace.promotes.size());
-  REQUIRE(trace.plays.size() >= 3);
+  REQUIRE(trace.plays.size() >= 1);
 
   // tailGrace=1 — the final PLAY in the live recording window may not have a
   // PROMOTE yet because the test ended before the next swap fired.

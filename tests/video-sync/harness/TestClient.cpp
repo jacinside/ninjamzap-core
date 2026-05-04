@@ -88,6 +88,7 @@ bool TestClient::connectAndJoin(std::chrono::milliseconds timeout) {
         client_->SetVideoChannel(opts_.videoChannel,
                                  (unsigned int)('H') | ((unsigned int)'2' << 8) |
                                      ((unsigned int)'6' << 16) | ((unsigned int)'4' << 24));
+        videoChannelRegistered_.store(true);
       }
       client_->NotifyServerOfChannelChange();
       joined_.store(true);
@@ -132,9 +133,24 @@ void TestClient::pauseVideo() {
 
 void TestClient::resumeVideo() {
   if (!client_) return;
-  client_->SetVideoChannel(opts_.videoChannel,
-                           (unsigned int)('H') | ((unsigned int)'2' << 8) |
-                               ((unsigned int)'6' << 16) | ((unsigned int)'4' << 24));
+  if (!videoChannelRegistered_.exchange(true)) {
+    // First time enabling video — register the channel with the server.
+    client_->SetLocalChannelInfo(opts_.videoChannel, "video",
+                                 /*setsrcch*/ false, 0,
+                                 /*setbitrate*/ false, 0,
+                                 /*setbcast*/ true, true,
+                                 /*setoutch*/ false, 0,
+                                 /*setflags*/ true, 0x10);
+    client_->SetVideoChannel(opts_.videoChannel,
+                             (unsigned int)('H') | ((unsigned int)'2' << 8) |
+                                 ((unsigned int)'6' << 16) | ((unsigned int)'4' << 24));
+    client_->NotifyServerOfChannelChange();
+  } else {
+    // Channel already registered — just re-enable it without resetting GUID.
+    client_->SetVideoChannel(opts_.videoChannel,
+                             (unsigned int)('H') | ((unsigned int)'2' << 8) |
+                                 ((unsigned int)'6' << 16) | ((unsigned int)'4' << 24));
+  }
 }
 
 void TestClient::sendFakeSPSPPS() {

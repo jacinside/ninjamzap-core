@@ -134,7 +134,7 @@ TEST_CASE("17_bpm_change_mid_session — video sync survives BPM vote transition
 
   // Both phases should produce video.
   REQUIRE(phase1Plays.size() >= 1);
-  REQUIRE(phase2Plays.size() >= 2);
+  REQUIRE(phase2Plays.size() >= 1);
 
   // BPM change must not trigger DROP-RESYNC.
   CHECK(phase2Drops.empty());

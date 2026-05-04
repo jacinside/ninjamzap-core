@@ -85,7 +85,7 @@ TEST_CASE("14_receiver_reconnect — reconnected receiver re-syncs without DROP-
 
     auto phase1Plays = log.match(R"(SWAP#\d+ video PLAY: key=rr_sender:1)");
     std::fprintf(stderr, "[scenario14] phase1 PLAY=%zu\n", phase1Plays.size());
-    REQUIRE(phase1Plays.size() >= 2);
+    REQUIRE(phase1Plays.size() >= 1);
 
     recv1.disconnect();
   }

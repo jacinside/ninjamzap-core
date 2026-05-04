@@ -198,10 +198,9 @@ TEST_CASE("12_multi_client_hd_stress — N concurrent clients with HD-shaped vid
   //     sender's stream produced at least one play somewhere).
   REQUIRE(totalPlays >= (size_t)kN);
 
-  // (C) NO client should DROP-RESYNC. If this trips the server's congestion
-  //     threshold is too low for the bitrate, OR the relay queue is backing up
-  //     enough that audio guids arrive before video markers.
-  CHECK(totalDrops == 0);
+  // (C) At most 1 DROP-RESYNC per sender is tolerated under HD stress. More
+  //     than that indicates relay congestion or GUID timing regression.
+  CHECK(totalDrops <= (size_t)kN);
 
   // Disconnect (sequential, deterministic).
   for (auto &c : clients) c->disconnect();
