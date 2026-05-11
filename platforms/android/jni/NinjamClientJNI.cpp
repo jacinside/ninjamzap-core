@@ -45,6 +45,7 @@ struct JNICallbackContext {
     jmethodID onChatMessageMethod = nullptr;
     jmethodID onLicenseMethod = nullptr;
     jmethodID onIntervalMethod = nullptr;
+    jmethodID onVideoFrameReadyMethod = nullptr;
 };
 
 // Map client pointer -> callback context
@@ -93,6 +94,30 @@ static void jni_onDisconnected(int32_t reason) {
     if (g_callbackCtx.onDisconnectedMethod) {
         guard.env->CallVoidMethod(callback, g_callbackCtx.onDisconnectedMethod, (jint)reason);
     }
+    guard.env->DeleteLocalRef(callback);
+}
+
+static void jni_onVideoFrameReady(const char* username, int32_t chidx,
+                                   uint32_t fourcc, int32_t frameIndex,
+                                   int32_t totalFrames, const void* data,
+                                   int32_t dataLen) {
+    JNIEnvGuard guard;
+    if (!guard.env || !g_callbackCtx.callbackRef ||
+        !g_callbackCtx.onVideoFrameReadyMethod) return;
+
+    jobject callback = guard.env->NewLocalRef(g_callbackCtx.callbackRef);
+    if (!callback) return;
+
+    jstring jUser = guard.env->NewStringUTF(username ? username : "");
+    jbyteArray jData = guard.env->NewByteArray(dataLen);
+    if (jData && data && dataLen > 0) {
+        guard.env->SetByteArrayRegion(jData, 0, dataLen,
+            reinterpret_cast<const jbyte*>(data));
+    }
+    guard.env->CallVoidMethod(callback, g_callbackCtx.onVideoFrameReadyMethod,
+        jUser, (jint)chidx, (jint)fourcc, (jint)frameIndex, (jint)totalFrames, jData);
+    guard.env->DeleteLocalRef(jUser);
+    if (jData) guard.env->DeleteLocalRef(jData);
     guard.env->DeleteLocalRef(callback);
 }
 
@@ -617,6 +642,8 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetCallbackTarget(JN
     g_callbackCtx.onChatMessageMethod = env->GetMethodID(cls, "onChatMessage", "(Ljava/lang/String;Ljava/lang/String;)V");
     g_callbackCtx.onLicenseMethod = env->GetMethodID(cls, "onLicense", "(Ljava/lang/String;)I");
     g_callbackCtx.onIntervalMethod = env->GetMethodID(cls, "onInterval", "(II)V");
+    g_callbackCtx.onVideoFrameReadyMethod = env->GetMethodID(cls, "onVideoFrameReady",
+        "(Ljava/lang/String;IIII[B)V");
     env->DeleteLocalRef(cls);
 
     // Set C callbacks on the NinjamClient
@@ -625,6 +652,7 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetCallbackTarget(JN
     NinjamClient_setChatCallback(client, jni_onChatMessage);
     NinjamClient_setLicenseCallback(client, jni_onLicense);
     NinjamClient_setIntervalCallback(client, jni_onInterval);
+    NinjamClient_setVideoFrameReadyCallback(client, jni_onVideoFrameReady);
 
     LOGI("JNI callback target set, method IDs cached");
 }
