@@ -852,4 +852,50 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetFxState(JNIEnv* e
     return result;
 }
 
+// ============================================================================
+// Video Channel (feature/video-android)
+// ============================================================================
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetVideoChannel(
+    JNIEnv* env, jobject thiz, jlong clientPtr, jint chidx, jint fourcc) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    if (!client) return;
+    NinjamClient_setVideoChannel(client, static_cast<int32_t>(chidx),
+                                  static_cast<uint32_t>(fourcc));
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeStopVideoChannel(
+    JNIEnv* env, jobject thiz, jlong clientPtr) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    if (!client) return;
+    NinjamClient_stopVideoChannel(client);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeQueueVideoFrame(
+    JNIEnv* env, jobject thiz, jlong clientPtr, jobject frameBuffer, jint length) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    if (!client || !frameBuffer || length <= 0) return;
+    void* ptr = env->GetDirectBufferAddress(frameBuffer);
+    if (!ptr) {
+        LOGE("nativeQueueVideoFrame: buffer is not a direct ByteBuffer");
+        return;
+    }
+    NinjamClient_queueVideoFrame(client, ptr, static_cast<int32_t>(length));
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetVideoSPSPPS(
+    JNIEnv* env, jobject thiz, jlong clientPtr, jobject spsPpsBuffer, jint length) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    if (!client || !spsPpsBuffer || length <= 0) return;
+    void* ptr = env->GetDirectBufferAddress(spsPpsBuffer);
+    if (!ptr) {
+        LOGE("nativeSetVideoSPSPPS: buffer is not a direct ByteBuffer");
+        return;
+    }
+    NinjamClient_setVideoSPSPPS(client, ptr, static_cast<int32_t>(length));
+}
+
 } // extern "C"
