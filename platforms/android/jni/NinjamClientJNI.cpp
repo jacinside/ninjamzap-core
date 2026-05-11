@@ -881,6 +881,63 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetFxState(JNIEnv* e
 }
 
 // ============================================================================
+// Audio engine extras — declared as `external fun` in Kotlin but never had
+// JNI implementations. Without these, the first call from onConnected
+// crashes with UnsatisfiedLinkError. Stubs match iOS's behavior:
+//   - DirectMonitor: not supported on Android Oboe yet
+//   - InputDevice/OutputDevice: Oboe negotiates by default; explicit routing
+//     lives in OptimizedAudioSession via AudioManager (Kotlin-side)
+//   - StreamMetrics: returns an empty array so callers get safe defaults
+// ============================================================================
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetDirectMonitor(
+    JNIEnv* env, jobject thiz, jlong enginePtr, jboolean enabled) {
+    (void)enginePtr; (void)enabled;
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetDirectMonitorGain(
+    JNIEnv* env, jobject thiz, jlong enginePtr, jfloat gain) {
+    (void)enginePtr; (void)gain;
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetInputDeviceId(
+    JNIEnv* env, jobject thiz, jlong enginePtr, jint deviceId) {
+    (void)enginePtr; (void)deviceId;
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetOutputDeviceId(
+    JNIEnv* env, jobject thiz, jlong enginePtr, jint deviceId) {
+    (void)enginePtr; (void)deviceId;
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamMetrics(
+    JNIEnv* env, jobject thiz, jlong enginePtr) {
+    (void)enginePtr;
+    return env->NewFloatArray(0);
+}
+
+// ============================================================================
+// License response (parity with iOS: releases C++ condition_variable in
+// abNinjam ninjamclient.cpp's licensecallback). Without this, the C++ thread
+// blocks for 120 s and connect returns with licenseNotAccepted (222).
+// ============================================================================
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeRespondToLicense(
+    JNIEnv* env, jobject thiz, jint accepted) {
+    NinjamClient_respondToLicense(accepted ? 1 : 0);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeCancelPendingLicense(
+    JNIEnv* env, jobject thiz) {
+    NinjamClient_cancelPendingLicense();
+}
+
+// ============================================================================
 // Video Channel (feature/video-android)
 // ============================================================================
 JNIEXPORT void JNICALL
