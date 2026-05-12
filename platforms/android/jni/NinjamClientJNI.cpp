@@ -1,5 +1,6 @@
 #include "NinjamClientJNI.h"
 #include "NinjamClientBridge.h"
+#include "ninjamclientAdapter.h"  // For direct adapter calls (Android-only)
 #include "OboeEngine.h"
 #include <android/log.h>
 #include <cstring>
@@ -940,6 +941,18 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeCancelPendingLicense
 // ============================================================================
 // Video Channel (feature/video-android)
 // ============================================================================
+JNIEXPORT jboolean JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeIsServerVideoSupported(
+    JNIEnv* env, jobject thiz, jlong clientPtr) {
+    // Reach the adapter directly to avoid adding to the shared C bridge.
+    // NinjamClientRef exposes its adapter as a public `void*`; the adapter
+    // header is on the Android include path (same one bridge files use).
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    if (!client || !client->adapter) return JNI_FALSE;
+    auto* adapter = static_cast<NinjamClientAdapter*>(client->adapter);
+    return adapter->isServerVideoSupported() ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL
 Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetVideoChannel(
     JNIEnv* env, jobject thiz, jlong clientPtr, jint chidx, jint fourcc) {
