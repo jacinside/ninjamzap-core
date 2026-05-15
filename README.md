@@ -61,7 +61,9 @@ NINJAM interval-based protocol. Highlights:
   control, and per-room threading) lives at
   [ninjamzap-server](https://github.com/jacinside/ninjamzap-server).
 
-A protocol overview lives in [`docs/`](docs/) (work in progress).
+For the full technical reference — sync marker, GUID matching, adaptive
+DS/PREV defer, threading model, wire format, and approaches that were
+tried and rejected — see [`docs/VIDEO_SYNC.md`](docs/VIDEO_SYNC.md).
 
 ---
 
