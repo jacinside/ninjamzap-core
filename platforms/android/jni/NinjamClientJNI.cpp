@@ -47,6 +47,7 @@ struct JNICallbackContext {
     jmethodID onLicenseMethod = nullptr;
     jmethodID onIntervalMethod = nullptr;
     jmethodID onVideoFrameReadyMethod = nullptr;
+    jmethodID onIntervalSwapMethod = nullptr;
 };
 
 // Map client pointer -> callback context
@@ -95,6 +96,16 @@ static void jni_onDisconnected(int32_t reason) {
     if (g_callbackCtx.onDisconnectedMethod) {
         guard.env->CallVoidMethod(callback, g_callbackCtx.onDisconnectedMethod, (jint)reason);
     }
+    guard.env->DeleteLocalRef(callback);
+}
+
+static void jni_onIntervalSwap() {
+    JNIEnvGuard guard;
+    if (!guard.env || !g_callbackCtx.callbackRef ||
+        !g_callbackCtx.onIntervalSwapMethod) return;
+    jobject callback = guard.env->NewLocalRef(g_callbackCtx.callbackRef);
+    if (!callback) return;
+    guard.env->CallVoidMethod(callback, g_callbackCtx.onIntervalSwapMethod);
     guard.env->DeleteLocalRef(callback);
 }
 
@@ -645,6 +656,7 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetCallbackTarget(JN
     g_callbackCtx.onIntervalMethod = env->GetMethodID(cls, "onInterval", "(II)V");
     g_callbackCtx.onVideoFrameReadyMethod = env->GetMethodID(cls, "onVideoFrameReady",
         "(Ljava/lang/String;IIII[B)V");
+    g_callbackCtx.onIntervalSwapMethod = env->GetMethodID(cls, "onIntervalSwap", "()V");
     env->DeleteLocalRef(cls);
 
     // Set C callbacks on the NinjamClient
@@ -654,6 +666,7 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetCallbackTarget(JN
     NinjamClient_setLicenseCallback(client, jni_onLicense);
     NinjamClient_setIntervalCallback(client, jni_onInterval);
     NinjamClient_setVideoFrameReadyCallback(client, jni_onVideoFrameReady);
+    NinjamClient_setIntervalSwapCallback(client, jni_onIntervalSwap);
 
     LOGI("JNI callback target set, method IDs cached");
 }
@@ -951,6 +964,35 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeIsServerVideoSupport
     if (!client || !client->adapter) return JNI_FALSE;
     auto* adapter = static_cast<NinjamClientAdapter*>(client->adapter);
     return adapter->isServerVideoSupported() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetUserChannelFlags(
+    JNIEnv* env, jobject thiz, jlong clientPtr, jstring username, jint channelIndex) {
+    // Mirrors iOS NinjamClient_getUserChannelFlags — walks the adapter's
+    // cached remote-user list and returns the channel's flags (0x10 = video).
+    // JS gates the remote video tile on `channel.flags === 16`, so without
+    // this the receiver never mounts a NativeVideoView / decoder.
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    if (!client || !client->adapter || !username) return 0;
+    auto* adapter = static_cast<NinjamClientAdapter*>(client->adapter);
+    const char* uname = env->GetStringUTFChars(username, nullptr);
+    if (!uname) return 0;
+    int32_t result = 0;
+    auto users = adapter->getCachedRemoteUsers();
+    for (const auto& user : users) {
+        if (user.name == uname) {
+            for (const auto& channel : user.channels) {
+                if (channel.id == channelIndex) {
+                    result = static_cast<int32_t>(channel.flags);
+                    break;
+                }
+            }
+            break;
+        }
+    }
+    env->ReleaseStringUTFChars(username, uname);
+    return result;
 }
 
 JNIEXPORT void JNICALL
