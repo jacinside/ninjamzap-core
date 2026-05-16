@@ -33,7 +33,15 @@
 // LoggerBridge.mm) which calls os_log with %{public}s — visible in Console.app
 // without Apple's privacy masking. On other platforms falls back to stderr.
 // No file mirror — read live from Console.
+// Enabled only in Debug builds. SYNCLOG fires multiple lines per audio
+// swap (per user, per video event) — fine for development, log spam in
+// production. Xcode sets DEBUG=1 for the Debug config; Release builds
+// leave it undefined and SYNCLOG compiles to a no-op.
+#if defined(DEBUG)
 #define SYNCLOG_ENABLED 1
+#else
+#define SYNCLOG_ENABLED 0
+#endif
 #if SYNCLOG_ENABLED && defined(__APPLE__)
 extern "C" void synclog_emit_oslog(const char *msg);
 #define SYNCLOG(...) do { char _b[512]; snprintf(_b,sizeof(_b),"[SYNCLOG] " __VA_ARGS__); synclog_emit_oslog(_b); } while(0)
@@ -1870,7 +1878,7 @@ int NJClient::Run() // nonzero if sleep ok
                 {
                   mpb_client_upload_interval_begin dib;
                   dib.parse(lc->m_enc_header_needsend);
-                  printf("SEND BLOCK HEADER %s\n",guidtostr_tmp(dib.guid));
+                  if (config_debug_level>1) printf("SEND BLOCK HEADER %s\n",guidtostr_tmp(dib.guid));
                 }
                 m_netcon->Send(lc->m_enc_header_needsend);
                 lc->m_enc_header_needsend=0;
@@ -2185,6 +2193,40 @@ void NJClient::SetVideoSPSPPS(const void *data, int len)
     m_video_spspps.Resize(0);
   }
   m_video_spspps_cs.Leave();
+}
+
+void NJClient::ResetAllVideoSyncState()
+{
+  m_video_recv_cs.Enter();
+  int resetCount = 0;
+  for (int vi = 0; vi < m_video_streams.GetSize(); vi++) {
+    VideoRecvState *vs = m_video_streams.Get(vi);
+    if (!vs) continue;
+    SYNCLOG("FOREGROUND video state reset: key=%s wasSynced=%d lastSeq=%d nextActive=%d accumFrames=%d holdCount=%d",
+      vs->key, vs->synced ? 1 : 0, vs->last_played_sender_seq,
+      vs->next.active ? 1 : 0, vs->accumulating.frameCount, vs->hold_count);
+    vs->accumulating.reset();
+    vs->next.reset();
+    vs->pending.reset();
+    vs->playing.reset();
+    vs->frame_idx = 0;
+    vs->expected_frames = 0;
+    vs->append_active = false;
+    vs->append_to_next = false;
+    vs->append_to_pending = false;
+    memset(vs->append_guid, 0, 16);
+    vs->empty_count = 0;
+    vs->hold_count = 0;
+    memset(vs->prev_ds_guid, 0, 16);
+    vs->synced = false;
+    vs->last_played_sender_seq = -1;
+    memset(vs->last_played_audio_guid, 0, 16);
+    resetCount++;
+  }
+  m_video_recv_cs.Leave();
+  if (resetCount > 0) {
+    SYNCLOG("FOREGROUND video sync reset complete: %d streams cleared", resetCount);
+  }
 }
 
 

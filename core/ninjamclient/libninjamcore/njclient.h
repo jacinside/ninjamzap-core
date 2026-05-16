@@ -235,6 +235,12 @@ public:
   void QueueVideoFrame(const void *data, int len);
   void SetVideoSPSPPS(const void *data, int len);
 
+  // Reset every remote VideoRecvState so accumulated buffers and stale
+  // GUID/sync state from a background interruption can't drift the
+  // video-vs-audio alignment after foreground. Same cleanup as USER-LEAVE
+  // but applied to all streams without removing them.
+  void ResetAllVideoSyncState();
+
   WDL_Mutex m_remotechannel_rd_mutex;
 
   bool is_likely_lobby() const {

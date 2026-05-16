@@ -97,6 +97,7 @@ public:
     void stopVideoChannel();
     void queueVideoFrame(const void *data, int len);
     void setVideoSPSPPS(const void *data, int len);
+    void resetVideoSync();
   
     // Channel management
     void removeLocalChannel(int channelIndex);

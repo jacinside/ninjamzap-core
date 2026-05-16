@@ -819,3 +819,8 @@ void NinjamClientAdapter::setVideoSPSPPS(const void *data, int len) {
     if (!client) return;
     client->gsNjClient()->SetVideoSPSPPS(data, len);
 }
+
+void NinjamClientAdapter::resetVideoSync() {
+    if (!client) return;
+    client->gsNjClient()->ResetAllVideoSyncState();
+}
