@@ -244,19 +244,25 @@ letting video freeze permanently.
 
 ## 7. Wire format
 
-```
-Per video interval, on the wire (all length-prefixed, 4-byte BE length):
+Per video interval, conceptually:
 
-  [20 bytes]  sync marker        ← interval counter + audio GUID
-  [SPS/PPS block]                ← [2B SPS len][SPS][2B PPS len][PPS]
-  [H.264 frame 1]                ← AVCC, 4-byte NAL length prefixes
-  [H.264 frame 2]
-  ...
+```
+[sync marker]      ← 20 bytes: 4B BE interval counter + 16B audio GUID
+[SPS/PPS block]    ← [2B BE SPS len][SPS NAL bytes][2B BE PPS len][PPS NAL bytes]
+[H.264 frame 1]    ← AVCC bytes from the encoder (4B BE NAL length prefixes)
+[H.264 frame 2]
+...
 ```
 
-Channel is flagged video-only (`flags & 0x10`) so the client's audio pipeline
-skips it in both `on_new_interval()` and `process_samples()`. `fourcc` is
-`H264`.
+Each of these blocks is sent as a separate NINJAM `UPLOAD_INTERVAL_WRITE`
+message — see §10 for the protocol-level framing. **The 4-byte BE prefixes
+inside the SPS/PPS block and the H.264 frames are *codec* framing, not NINJAM
+chunk framing.** This is the most common source of wire-format confusion: do
+not add a second length wrapper around each chunk.
+
+Channel is flagged video-only (`flags & 0x10` in `SET_CHANNEL_INFO`) so other
+clients' audio pipelines skip it. `fourcc` is `H264` for this design; the
+relay also accepts `VP8 ` and `MJPG` — the sync mechanism is codec-agnostic.
 
 ---
 
@@ -289,6 +295,127 @@ These were tried and rejected — included so others don't repeat them:
 The throughline: **anything that introduces a second clock, a second
 transport, or a network-dependent trigger reintroduces drift or latency.** The
 working design keeps video on exactly the rails NINJAM already built for audio.
+
+---
+
+## 10. Implementer's guide
+
+If you're building a NINJAM-compatible client and want to send or receive
+synchronized video, here is the protocol-level recipe — everything you need
+without having to read this codebase.
+
+### Message mapping
+
+| What                              | NINJAM message                          | ID   |
+|-----------------------------------|-----------------------------------------|------|
+| Announce a (video) channel        | `MESSAGE_CLIENT_SET_CHANNEL_INFO`       | 0x82 |
+| Subscribe to a user's channels    | `MESSAGE_CLIENT_SET_USERMASK`           | 0x81 |
+| Start a per-interval upload       | `MESSAGE_CLIENT_UPLOAD_INTERVAL_BEGIN`  | 0x83 |
+| Send one chunk of interval data   | `MESSAGE_CLIENT_UPLOAD_INTERVAL_WRITE`  | 0x84 |
+| End an interval                   | `UPLOAD_INTERVAL_WRITE` with `flags & 1`| 0x84 |
+
+In our code these map to `RawDataSendBegin()` / `RawDataSendWrite()` in
+`njclient.cpp` — but those are just wrappers over the standard NINJAM messages
+above. The server (stock NINJAM, or our fork) doesn't need any custom support
+to relay video.
+
+### Advertising a video channel (sender)
+
+Send `SET_CHANNEL_INFO` (0x82) with a record per local channel. Per-channel
+format:
+
+```
+[name (null-terminated UTF-8)]
+[2B volume LE]
+[1B pan]
+[1B flags]                  ← set bit 0x10 for video-only
+```
+
+Standard NINJAM clients treat `flags & 0x10` as "skip this channel for audio
+mixing" — they will list the channel in the userlist but pass it over in the
+audio pipeline. The 4CC for the interval uploads (next step) is `H264`,
+`VP8 ` (note the trailing space), or `MJPG`.
+
+### Subscribing to a video channel (receiver)
+
+`SET_USERMASK` (0x81) per user carries a 4-byte LE bitmask of channel indices.
+Bit *n* enables channel *n*. There is no automatic separation between audio
+and video — you must set the bit for the video channel index **explicitly** to
+receive its data.
+
+### Per-interval send sequence (sender)
+
+On every audio interval boundary, on the same thread that emits the audio
+interval:
+
+1. If a video interval is already open, send an **END** for it:
+   `UPLOAD_INTERVAL_WRITE` with the old GUID, empty payload, `flags & 1` set.
+2. Send `UPLOAD_INTERVAL_BEGIN` for the new interval:
+   - 16 B GUID (fresh random — see GUID lifecycle below)
+   - 4 B estimated size (can be 0)
+   - 4 B `fourcc` (e.g. `H264`)
+   - 1 B channel index
+3. Send the **20-byte sync marker** as one `UPLOAD_INTERVAL_WRITE`:
+   - 4 B BE interval counter
+   - 16 B audio channel-0 GUID (see "Audio GUID source")
+4. Send the cached **SPS/PPS block** as a second `UPLOAD_INTERVAL_WRITE`.
+5. As the encoder produces frames during the interval, send each as its own
+   `UPLOAD_INTERVAL_WRITE` (verbatim AVCC bytes — no extra wrapping).
+
+Each `UPLOAD_INTERVAL_WRITE` carries `[16B GUID][1B flags][N bytes data]` in
+its payload. Writes larger than 9216 bytes (`MAX_ENC_BLOCKSIZE`) are
+automatically fragmented into multiple messages by the protocol layer; only
+the last fragment carries the END flag. The receiver reassembles them by GUID.
+
+### GUID lifecycle
+
+- **Video GUID** — fresh 16 random bytes per video interval, generated on the
+  sender right before sending `UPLOAD_INTERVAL_BEGIN`. In our code we use
+  `WDL_RNG_bytes(guid, 16)` (the same RNG NINJAM uses for audio).
+- **Audio GUID source for the sync marker** — read the GUID that the local
+  audio channel 0 has in its *current* upload-interval header. In our code:
+  `m_curwritefile.guid` for audio channel 0. In protocol terms: it's the same
+  16 bytes you passed to your most recent audio `UPLOAD_INTERVAL_BEGIN` for
+  channel 0. Both ends of the connection see the same 16 bytes; that
+  identity is what makes the GUID match work at the receiver.
+
+### Decoder build / rebuild policy (receiver)
+
+- **Build the decoder once** when the first SPS/PPS arrives.
+- **Rebuild only when the SPS bytes change** (resolution change, encoder
+  reset). The SPS/PPS is sent every interval as a recovery aid for
+  late-joining receivers and for decoder loss, *not* as a signal to reset.
+  Rebuilding every interval will cause visible stutter (we tried — see §9).
+- **The first frame after BEGIN should be an IDR keyframe.** Force one on
+  every interval boundary on the sender. If you receive only P-frames and
+  have no SPS/PPS yet, hold playback for that user until the next interval
+  delivers them.
+
+### Common pitfalls
+
+- **Codec framing vs NINJAM framing.** The 4-byte BE length prefixes in the
+  wire format (inside SPS/PPS blocks, inside AVCC frames) are *codec*
+  structure — NINJAM frames each `UPLOAD_INTERVAL_WRITE` message itself with
+  its own header (5-byte Net_Message: 1 B type + 4 B size LE). Don't
+  double-wrap.
+- **Output pixel format mismatch.** Hardware decoders frequently return NV12
+  while a renderer expects BGRA / I420. This renders as a uniform color and
+  looks exactly like decoder failure. Always check the `CVPixelBuffer` /
+  surface format before debugging the decoder.
+- **Forgetting `flags & 0x10`** on the local channel makes your own client
+  try to mix video bytes as audio at playback (audible noise). On the
+  receiving side, other clients without `0x10` awareness *also* try to mix
+  the bytes — that's why standard NINJAM clients gracefully fall back to
+  silence: their Vorbis decoder rejects the input.
+- **Explicit USERMASK bit.** A client that subscribes to a user but doesn't
+  set the bit for the video channel will simply never receive the data — no
+  error, just silence.
+- **Public-server channel caps.** Public NINJAM servers configure
+  `MaxChannels <normal> <anon>` and most ship with `MaxChannels 32 2` (the
+  example config default). Video is a full channel slot — stereo audio +
+  video = 3 channels, which exceeds an anon cap of 2. NinjamZap's own server
+  (`jam.ninjamzap.com:2049` and `:2050`) has the anon cap raised to 8 so
+  third-party clients can test video against it.
 
 ---
 
