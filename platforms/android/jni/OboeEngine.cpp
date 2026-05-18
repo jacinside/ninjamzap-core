@@ -23,9 +23,13 @@ void OboeEngine::setClient(NinjamClientRef* client) {
 }
 
 bool OboeEngine::start(int32_t sampleRate, int32_t framesPerBuffer) {
+    std::lock_guard<std::mutex> lock(m_streamMutex);
+
     if (m_running.load()) {
-        LOGI("Engine already running, stopping first");
-        stop();
+        LOGI("Engine already running, closing streams first");
+        m_running.store(false);
+        m_callback->setInputStream(nullptr);
+        closeStreams();
     }
 
     m_sampleRate = sampleRate;
@@ -86,12 +90,38 @@ bool OboeEngine::start(int32_t sampleRate, int32_t framesPerBuffer) {
 }
 
 void OboeEngine::stop() {
+    std::lock_guard<std::mutex> lock(m_streamMutex);
     if (!m_running.load()) return;
 
     LOGI("Stopping audio engine");
     m_running.store(false);
     m_callback->setInputStream(nullptr);
     closeStreams();
+}
+
+int32_t OboeEngine::getInputSessionId() const {
+    if (!m_inputStream) return 0;  // oboe::SessionId::None
+    return m_inputStream->getSessionId();
+}
+
+void OboeEngine::setInputDeviceId(int32_t deviceId) {
+    int32_t prev = m_inputDeviceId.exchange(deviceId);
+    if (prev == deviceId) return;
+    LOGI("Input device changed: %d -> %d", prev, deviceId);
+    std::lock_guard<std::mutex> lock(m_streamMutex);
+    if (m_running.load()) {
+        reopenStreamsLocked();
+    }
+}
+
+void OboeEngine::setOutputDeviceId(int32_t deviceId) {
+    int32_t prev = m_outputDeviceId.exchange(deviceId);
+    if (prev == deviceId) return;
+    LOGI("Output device changed: %d -> %d", prev, deviceId);
+    std::lock_guard<std::mutex> lock(m_streamMutex);
+    if (m_running.load()) {
+        reopenStreamsLocked();
+    }
 }
 
 bool OboeEngine::isRunning() const {
@@ -129,16 +159,28 @@ void OboeEngine::setSharingMode(oboe::SharingMode mode) {
 // ============================================================================
 
 bool OboeEngine::openOutputStream() {
+    // When the user has explicitly picked an output device, fall back to
+    // Shared sharing mode. Exclusive (MMAP) ignores setDeviceId on many HAL
+    // endpoints (only the default endpoint is exclusive-capable), so an
+    // explicit pick would silently route to default. Shared honors the
+    // device ID universally at the small cost of one extra HW mixer hop —
+    // acceptable on the route-change path. Auto (kUnspecified) keeps the
+    // low-latency Exclusive path.
+    int32_t devId = m_outputDeviceId.load();
+    oboe::SharingMode sharing = (devId == oboe::kUnspecified)
+        ? m_sharingMode
+        : oboe::SharingMode::Shared;
     oboe::AudioStreamBuilder builder;
     builder.setDirection(oboe::Direction::Output)
            ->setPerformanceMode(m_performanceMode)
-           ->setSharingMode(m_sharingMode)
+           ->setSharingMode(sharing)
            ->setFormat(oboe::AudioFormat::Float)
            ->setChannelCount(oboe::ChannelCount::Stereo)
            ->setSampleRate(m_sampleRate)
            ->setFramesPerDataCallback(m_framesPerBuffer)
            ->setDataCallback(m_callback)
            ->setErrorCallback(m_callback)
+           ->setDeviceId(devId)
            ->setUsage(oboe::Usage::Game);  // Low-latency usage hint
 
     oboe::Result result = builder.openStream(m_outputStream);
@@ -149,6 +191,9 @@ bool OboeEngine::openOutputStream() {
 
     // Update sample rate to what the device actually gave us
     m_sampleRate = m_outputStream->getSampleRate();
+    LOGI("Output stream opened: requested deviceId=%d actual deviceId=%d sharing=%s",
+         m_outputDeviceId.load(), m_outputStream->getDeviceId(),
+         oboe::convertToText(m_outputStream->getSharingMode()));
     return true;
 }
 
@@ -160,6 +205,13 @@ bool OboeEngine::openInputStream() {
            ->setFormat(oboe::AudioFormat::Float)
            ->setChannelCount(oboe::ChannelCount::Mono)   // Most mics are mono
            ->setSampleRate(m_sampleRate)                  // Match output sample rate
+           ->setDeviceId(m_inputDeviceId.load())
+           // Allocate an Android audio session ID so Kotlin can attach
+           // AcousticEchoCanceler / NoiseSuppressor / AutomaticGainControl
+           // to this stream (the AEC toggle in the connection screen).
+           // Without Allocate, getSessionId() returns kSessionIdNone (0) and
+           // AcousticEchoCanceler.create() rejects it.
+           ->setSessionId(oboe::SessionId::Allocate)
            ->setInputPreset(oboe::InputPreset::VoicePerformance);  // Low-latency mic preset
 
     oboe::Result result = builder.openStream(m_inputStream);
@@ -167,7 +219,9 @@ bool OboeEngine::openInputStream() {
         LOGE("Failed to open input stream: %s", oboe::convertToText(result));
         return false;
     }
-
+    LOGI("Input stream opened: requested deviceId=%d actual deviceId=%d sharing=%s",
+         m_inputDeviceId.load(), m_inputStream->getDeviceId(),
+         oboe::convertToText(m_inputStream->getSharingMode()));
     return true;
 }
 
@@ -182,4 +236,37 @@ void OboeEngine::closeStreams() {
         m_outputStream->close();
         m_outputStream.reset();
     }
+}
+
+bool OboeEngine::reopenStreamsLocked() {
+    LOGI("Reopening streams (input=%d output=%d)",
+         m_inputDeviceId.load(), m_outputDeviceId.load());
+    m_running.store(false);
+    m_callback->setInputStream(nullptr);
+    closeStreams();
+
+    if (!openOutputStream()) {
+        LOGE("reopen: output failed");
+        return false;
+    }
+    if (!openInputStream()) {
+        LOGE("reopen: input failed (continuing without mic)");
+    }
+    if (m_inputStream) {
+        m_callback->setInputStream(m_inputStream.get());
+        oboe::Result r = m_inputStream->requestStart();
+        if (r != oboe::Result::OK) {
+            LOGE("reopen: input start failed: %s", oboe::convertToText(r));
+            m_callback->setInputStream(nullptr);
+            m_inputStream.reset();
+        }
+    }
+    oboe::Result r = m_outputStream->requestStart();
+    if (r != oboe::Result::OK) {
+        LOGE("reopen: output start failed: %s", oboe::convertToText(r));
+        closeStreams();
+        return false;
+    }
+    m_running.store(true);
+    return true;
 }
