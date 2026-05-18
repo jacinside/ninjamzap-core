@@ -7,6 +7,7 @@
 #include "SessionRecorder.h"
 #include <memory>
 #include <atomic>
+#include <mutex>
 
 /**
  * Manages Oboe audio streams for full-duplex NINJAM audio.
@@ -53,6 +54,19 @@ public:
     void setPerformanceMode(oboe::PerformanceMode mode);
     void setSharingMode(oboe::SharingMode mode);
 
+    // Pin streams to a specific AudioDeviceInfo.id. oboe::kUnspecified (0)
+    // means "let Oboe pick" (current behavior). When the engine is already
+    // running, the streams are closed and reopened on the new device so the
+    // change takes effect immediately (Oboe has no AVAudioSession-style
+    // setPreferredInput; close-and-reopen is the only path).
+    void setInputDeviceId(int32_t deviceId);
+    void setOutputDeviceId(int32_t deviceId);
+
+    // Allocated input session ID — used by Kotlin to attach
+    // AcousticEchoCanceler / NoiseSuppressor / AutomaticGainControl AudioFX.
+    // Returns 0 (kSessionIdNone) if the input stream isn't open.
+    int32_t getInputSessionId() const;
+
 private:
     // Streams
     std::shared_ptr<oboe::AudioStream> m_outputStream;
@@ -77,10 +91,20 @@ private:
     oboe::PerformanceMode m_performanceMode = oboe::PerformanceMode::LowLatency;
     oboe::SharingMode m_sharingMode = oboe::SharingMode::Exclusive;
 
+    // Selected audio device IDs (AudioDeviceInfo.id). kUnspecified = auto.
+    std::atomic<int32_t> m_inputDeviceId{oboe::kUnspecified};
+    std::atomic<int32_t> m_outputDeviceId{oboe::kUnspecified};
+
+    // Serializes stream lifecycle (start / stop / live reopen on device change).
+    std::mutex m_streamMutex;
+
     // Helpers
     bool openOutputStream();
     bool openInputStream();
     void closeStreams();
+    // Closes and reopens both streams using the current device IDs.
+    // Caller must hold m_streamMutex. Returns true on success.
+    bool reopenStreamsLocked();
 };
 
 #endif // OBOE_ENGINE_H

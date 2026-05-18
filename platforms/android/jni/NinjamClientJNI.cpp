@@ -918,13 +918,17 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetDirectMonitorGain
 JNIEXPORT void JNICALL
 Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetInputDeviceId(
     JNIEnv* env, jobject thiz, jlong enginePtr, jint deviceId) {
-    (void)enginePtr; (void)deviceId;
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return;
+    eng->setInputDeviceId(static_cast<int32_t>(deviceId));
 }
 
 JNIEXPORT void JNICALL
 Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetOutputDeviceId(
     JNIEnv* env, jobject thiz, jlong enginePtr, jint deviceId) {
-    (void)enginePtr; (void)deviceId;
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return;
+    eng->setOutputDeviceId(static_cast<int32_t>(deviceId));
 }
 
 JNIEXPORT jfloatArray JNICALL
@@ -932,6 +936,14 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamMetrics(
     JNIEnv* env, jobject thiz, jlong enginePtr) {
     (void)enginePtr;
     return env->NewFloatArray(0);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetInputSessionId(
+    JNIEnv* env, jobject thiz, jlong enginePtr) {
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return 0;
+    return static_cast<jint>(eng->getInputSessionId());
 }
 
 // ============================================================================
@@ -993,6 +1005,19 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetUserChannelFlags(
     }
     env->ReleaseStringUTFChars(username, uname);
     return result;
+}
+
+// Flush every per-stream VideoRecvState in NJClient — mirrors iOS calling
+// NinjamClient_resetAllVideoSyncState on app foreground to clear background-
+// induced GUID-matching drift. Direct adapter access so this lives Android-only
+// (no edit to platforms/ios/).
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeResetVideoSync(
+    JNIEnv* env, jobject thiz, jlong clientPtr) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    if (!client || !client->adapter) return;
+    auto* adapter = static_cast<NinjamClientAdapter*>(client->adapter);
+    adapter->resetVideoSync();
 }
 
 JNIEXPORT void JNICALL
