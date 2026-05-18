@@ -115,6 +115,26 @@ public:
     
     // Metronome control
     void setMetronome(float volume, bool mute, float pan);
+    // Routes the metronome to a specific output channel pair. `chidx & 0xff` is
+    // the output channel index, `chidx | 1024` flags mono mode (write only to
+    // that single channel, not chidx+1). This lets the host (e.g. iOS engine)
+    // split metronome from the music mix so recording can omit it without
+    // adding any audio processing — the metronome lives in its own output
+    // channel rendered by NJClient in the same audio pass as everything else.
+    void setMetronomeChannel(int chidx);
+    // Like processAudio() but renders the metronome separately into a third
+    // mono output buffer. Caller (e.g. iOS engine) mixes outBufferMetro into
+    // its speaker bus but NOT into the recording bus, yielding a metronome-
+    // free recording without any post-processing. Requires
+    // setMetronomeChannel(2 | 1024) so NJClient writes the metronome to
+    // outbuf[2] in mono mode.
+    void processAudio3(
+        float* inBufferLeft,
+        float* inBufferRight,
+        float* outBufferLeft,
+        float* outBufferRight,
+        float* outBufferMetro,
+        int numFrames);
     
     // Master volume controls
     void setMasterVolume(float volume, float pan, bool mute);
@@ -197,6 +217,9 @@ private:
     int numChannels;
     float** inputBuffer;
     float** outputBuffer;
+    // Mono staging buffer for the metronome output channel when using
+    // processAudio3(). Allocated alongside outputBuffer in the same path.
+    float*  metroOutputBuffer;
     
     // Metronome settings
     bool metronomeEnabled;

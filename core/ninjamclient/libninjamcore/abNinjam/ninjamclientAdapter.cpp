@@ -31,6 +31,7 @@ NinjamClientAdapter::NinjamClientAdapter()
     , numChannels(2)
     , inputBuffer(nullptr)
     , outputBuffer(nullptr)
+    , metroOutputBuffer(nullptr)
     , metronomeEnabled(true)
     , metronomeVolume(0.5f)
     , metronomePan(0.0f)
@@ -63,7 +64,9 @@ NinjamClientAdapter::~NinjamClientAdapter() {
         }
         delete[] outputBuffer;
     }
-    
+
+    delete[] metroOutputBuffer;
+
     delete client;
 }
 
@@ -277,10 +280,16 @@ void NinjamClientAdapter::setAudioConfig(int sampleRate, int channels) {
     // Allocate new buffers
     inputBuffer = new float*[channels];
     outputBuffer = new float*[channels];
-    
+
     for (int i = 0; i < channels; i++) {
         inputBuffer[i] = new float[8192]; // Use a reasonable buffer size
         outputBuffer[i] = new float[8192];
+    }
+
+    // Mono staging for the metronome output channel (used by processAudio3).
+    // Allocated once at audio-config time, freed in the destructor.
+    if (!metroOutputBuffer) {
+        metroOutputBuffer = new float[8192];
     }
 }
 
@@ -461,10 +470,73 @@ void NinjamClientAdapter::setMetronome(float volume, bool mute, float pan) {
     metronomeVolume = volume;
     metronomeEnabled = !mute;
     metronomePan = pan;
-    
+
     client->gsNjClient()->config_metronome_mute = !metronomeEnabled;
     client->gsNjClient()->config_metronome_pan = metronomePan;
     client->gsNjClient()->config_metronome = metronomeVolume;
+}
+
+void NinjamClientAdapter::setMetronomeChannel(int chidx) {
+    client->gsNjClient()->SetMetronomeChannel(chidx);
+}
+
+void NinjamClientAdapter::processAudio3(
+    float* inBufferLeft,
+    float* inBufferRight,
+    float* outBufferLeft,
+    float* outBufferRight,
+    float* outBufferMetro,
+    int numFrames
+) {
+    this->numFrames = numFrames;
+
+    if (!connected || numFrames <= 0) {
+        if (outBufferLeft)  memset(outBufferLeft,  0, sizeof(float) * numFrames);
+        if (outBufferRight) memset(outBufferRight, 0, sizeof(float) * numFrames);
+        if (outBufferMetro) memset(outBufferMetro, 0, sizeof(float) * numFrames);
+        return;
+    }
+
+    // Stage input (same as processAudio)
+    if (inBufferLeft) {
+        memcpy(inputBuffer[0], inBufferLeft, numFrames * sizeof(float));
+    } else {
+        memset(inputBuffer[0], 0, numFrames * sizeof(float));
+    }
+    if (numChannels > 1) {
+        if (inBufferRight) {
+            memcpy(inputBuffer[1], inBufferRight, numFrames * sizeof(float));
+        } else {
+            memset(inputBuffer[1], 0, numFrames * sizeof(float));
+        }
+    }
+
+    // processAudio3 assumes a stereo engine (numChannels==2). Today iOS is
+    // always stereo; falling back to processAudio for a mono engine keeps the
+    // contract safe without baking in a 3-channel layout that depends on
+    // outputBuffer[1] existing.
+    if (numChannels < 2) {
+        processAudio(inBufferLeft, inBufferRight, outBufferLeft, outBufferRight, numFrames);
+        if (outBufferMetro) memset(outBufferMetro, 0, numFrames * sizeof(float));
+        return;
+    }
+
+    // Zero only the metronome staging — NJClient overwrites outputBuffer[0/1]
+    // with the music mix (same behavior the original processAudio relies on),
+    // but nothing else writes to outbuf[2] before the metronome block
+    // accumulates into it, so without zeroing here last-frame's click would
+    // leak into the current frame's silence between ticks.
+    memset(metroOutputBuffer, 0, numFrames * sizeof(float));
+
+    // 3-channel output: outbuf[0/1] = stereo music mix, outbuf[2] = metronome mono.
+    // Requires setMetronomeChannel(2 | 1024) so NJClient routes the metronome to
+    // outbuf[2] and skips outbuf[3] (mono mode).
+    float* outbufs[3] = { outputBuffer[0], outputBuffer[1], metroOutputBuffer };
+    client->audiostreamOnSamples(inputBuffer, numChannels, outbufs, 3, numFrames, sampleRate);
+
+    if (outBufferLeft)  memcpy(outBufferLeft,  outputBuffer[0],   numFrames * sizeof(float));
+    if (outBufferRight) memcpy(outBufferRight, outputBuffer[1],   numFrames * sizeof(float));
+    if (outBufferMetro) memcpy(outBufferMetro, metroOutputBuffer, numFrames * sizeof(float));
 }
 
 void NinjamClientAdapter::setMasterVolume(float volume, float pan, bool mute) {
