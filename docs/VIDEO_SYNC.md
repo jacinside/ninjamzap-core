@@ -68,7 +68,7 @@ camera ──▶ H.264 encoder (app code)                 C++ Run() thread
    [C++ audio thread]        │  protocol                    │
      • END prev interval     ├──▶ server ──────────▶         ▼
      • BEGIN new interval    │  (opaque relay)     on_new_interval()
-     • send 20-byte marker   │                     [receiver's local clock]
+     • send 24-byte marker   │                     [receiver's local clock]
      • send cached SPS/PPS ──┘                       • GUID-match video↔audio
                                                      • swap buffer → playback
 ```
@@ -79,7 +79,7 @@ flowchart LR
         cam[Camera] --> enc[H.264 encoder<br/>app code]
         enc --> qf["QueueVideoFrame()"]
         oni["on_new_interval()<br/>C++ audio thread"]
-        oni -. "END prev / BEGIN new<br/>20-byte marker + SPS/PPS" .-> qf
+        oni -. "END prev / BEGIN new<br/>24-byte marker + SPS/PPS" .-> qf
     end
 
     subgraph SERVER["NINJAM server"]
@@ -194,12 +194,15 @@ it was recorded alongside.
 
 NINJAM already generates a fresh 16-byte GUID for each audio interval (when the
 encoder writes a new interval header). We piggyback on it. The **first chunk**
-of every video interval is a 20-byte sync marker:
+of every video interval is a 24-byte sync marker (a 20-byte inner payload
+wrapped in the standard 4-byte BE length prefix that every chunk uses — see
+§7):
 
 ```
-Bytes 0–3   : interval counter      (big-endian uint32)
-Bytes 4–19  : audio channel-0 GUID  (the GUID of the audio interval
-                                     recorded at the same instant)
+Bytes 0–3   : 0x00 00 00 14         ← outer length prefix (20, big-endian)
+Bytes 4–7   : interval counter      ← uint32 big-endian
+Bytes 8–23  : audio channel-0 GUID  ← the GUID of the audio interval
+                                      recorded at the same instant
 ```
 
 On the receiver, audio decode state already tracks two GUIDs: the currently
@@ -244,21 +247,38 @@ letting video freeze permanently.
 
 ## 7. Wire format
 
-Per video interval, conceptually:
+Each video interval is an ordered series of **chunks**, each sent as one (or
+more — see fragmentation note) NINJAM `UPLOAD_INTERVAL_WRITE` messages. **Every
+chunk's payload begins with a 4-byte big-endian length prefix** giving the
+size of the inner payload that follows. The receiver's frame reassembler reads
+this prefix to identify logical chunk boundaries regardless of how NINJAM's
+transport fragmented the WRITE.
+
+The chunks, in order per interval:
 
 ```
-[sync marker]      ← 20 bytes: 4B BE interval counter + 16B audio GUID
-[SPS/PPS block]    ← [2B BE SPS len][SPS NAL bytes][2B BE PPS len][PPS NAL bytes]
-[H.264 frame 1]    ← AVCC bytes from the encoder (4B BE NAL length prefixes)
-[H.264 frame 2]
-...
+Chunk 1 — Sync marker (24 bytes total on the wire):
+  [4B BE = 20]                   ← inner payload length
+  [4B BE interval counter]       ← uint32, sender's interval index
+  [16B audio channel-0 GUID]     ← the 16 bytes from the audio interval
+                                   being recorded right now on this client
+
+Chunk 2 — SPS/PPS block:
+  [4B BE = inner length]
+  [2B BE SPS len][SPS NAL bytes]
+  [2B BE PPS len][PPS NAL bytes]
+
+Chunk 3..N — H.264 frame (one per encoded frame):
+  [4B BE = frame length]
+  [AVCC bytes from the encoder]  ← standard H.264 with its own 4-byte
+                                   NAL length prefixes inside
 ```
 
-Each of these blocks is sent as a separate NINJAM `UPLOAD_INTERVAL_WRITE`
-message — see §10 for the protocol-level framing. **The 4-byte BE prefixes
-inside the SPS/PPS block and the H.264 frames are *codec* framing, not NINJAM
-chunk framing.** This is the most common source of wire-format confusion: do
-not add a second length wrapper around each chunk.
+> **Two layers of length prefixes in frame chunks** — the **outer** 4-byte BE
+> length is the chunk wrapper (required by our receiver). The **inner** 4-byte
+> BE prefixes (one per NAL unit) are standard H.264 AVCC format, which the
+> encoder produces and the decoder consumes verbatim. Pass AVCC bytes through
+> unmodified and add only the outer length wrapper.
 
 Channel is flagged video-only (`flags & 0x10` in `SET_CHANNEL_INFO`) so other
 clients' audio pipelines skip it. `fourcc` is `H264` for this design; the
@@ -355,17 +375,26 @@ interval:
    - 4 B estimated size (can be 0)
    - 4 B `fourcc` (e.g. `H264`)
    - 1 B channel index
-3. Send the **20-byte sync marker** as one `UPLOAD_INTERVAL_WRITE`:
+3. Send the **sync marker** as one `UPLOAD_INTERVAL_WRITE`. Payload (24 bytes):
+   - 4 B BE `0x00 00 00 14` (= 20, the inner length)
    - 4 B BE interval counter
    - 16 B audio channel-0 GUID (see "Audio GUID source")
 4. Send the cached **SPS/PPS block** as a second `UPLOAD_INTERVAL_WRITE`.
+   Payload: `[4B BE inner length][2B BE SPS len][SPS NAL][2B BE PPS len][PPS NAL]`.
 5. As the encoder produces frames during the interval, send each as its own
-   `UPLOAD_INTERVAL_WRITE` (verbatim AVCC bytes — no extra wrapping).
+   `UPLOAD_INTERVAL_WRITE`. Payload: `[4B BE frame length][AVCC bytes]`.
 
-Each `UPLOAD_INTERVAL_WRITE` carries `[16B GUID][1B flags][N bytes data]` in
-its payload. Writes larger than 9216 bytes (`MAX_ENC_BLOCKSIZE`) are
-automatically fragmented into multiple messages by the protocol layer; only
-the last fragment carries the END flag. The receiver reassembles them by GUID.
+**Every chunk payload begins with a 4-byte big-endian length prefix — this is
+a hard requirement.** The receiver's frame reassembler reads the first 4
+bytes of each logical chunk as a length to identify chunk boundaries. Forget
+it and the receiver can't tell where one chunk ends and the next begins.
+
+Each `UPLOAD_INTERVAL_WRITE` message carries `[16B GUID][1B flags][N bytes
+data]` in its NINJAM payload; the N bytes are your chunk (already prefixed as
+above). Writes larger than 9216 bytes (`MAX_ENC_BLOCKSIZE`) are automatically
+fragmented into multiple messages by the protocol layer; only the last
+fragment carries `flags & 1` (END). The receiver concatenates fragments by
+GUID before applying the outer-length parser.
 
 ### GUID lifecycle
 
@@ -393,11 +422,12 @@ the last fragment carries the END flag. The receiver reassembles them by GUID.
 
 ### Common pitfalls
 
-- **Codec framing vs NINJAM framing.** The 4-byte BE length prefixes in the
-  wire format (inside SPS/PPS blocks, inside AVCC frames) are *codec*
-  structure — NINJAM frames each `UPLOAD_INTERVAL_WRITE` message itself with
-  its own header (5-byte Net_Message: 1 B type + 4 B size LE). Don't
-  double-wrap.
+- **Forgetting the outer 4-byte BE length prefix on chunks.** Every chunk
+  payload (marker, SPS/PPS, every frame) must start with a 4-byte big-endian
+  length giving the bytes that follow. The receiver's reassembler reads this
+  to identify logical chunk boundaries — without it, parsing breaks at the
+  first chunk. The H.264 AVCC 4-byte NAL prefixes *inside* frames are codec
+  format and live underneath this outer wrapper; they are not a substitute.
 - **Output pixel format mismatch.** Hardware decoders frequently return NV12
   while a renderer expects BGRA / I420. This renders as a uniform color and
   looks exactly like decoder failure. Always check the `CVPixelBuffer` /
