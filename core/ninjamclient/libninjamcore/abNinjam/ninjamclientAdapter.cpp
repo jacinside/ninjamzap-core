@@ -420,6 +420,21 @@ void NinjamClientAdapter::SetLocalChannelInfo(int index, const char* name, bool 
     client->gsNjClient()->NotifyServerOfChannelChange();
 }
 
+void NinjamClientAdapter::setLocalChannelBitrate(int index, int bitrate) {
+    // Pass nullptr for name + all setX flags false except setbitrate — NJClient
+    // skips fields whose setX is false, and skips name when it's null.
+    client->gsNjClient()->SetLocalChannelInfo(
+                                              index,
+                                              nullptr,    // name unchanged
+                                              false, 0,   // setsrcch=false
+                                              true, bitrate, // setbitrate=true
+                                              false, false,  // setbcast=false
+                                              false, 0,   // setoutch=false
+                                              false, 0    // setflags=false
+                                              );
+    client->gsNjClient()->NotifyServerOfChannelChange();
+}
+
 void NinjamClientAdapter::sendUserMask(unsigned int mask) {
     // Implementation depends on the internal structure of NJClient
     // This would typically be used to subscribe/unsubscribe from user channels

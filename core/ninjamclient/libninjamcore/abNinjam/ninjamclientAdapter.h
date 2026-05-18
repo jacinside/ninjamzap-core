@@ -103,6 +103,10 @@ public:
     void removeLocalChannel(int channelIndex);
     void setLocalChannelMonitoring(int index, float volume, float pan, bool mute, bool solo);
     void SetLocalChannelInfo(int index, const char* name, bool setsrcch, int srcch, bool setxmit, bool xmit, bool setflags, int flags);
+    // Vorbis encoder bitrate for the local channel. NJClient maps bitrate → qv
+    // internally (njclient.cpp:74-97). Triggers encoder rebuild on next process_samples
+    // when bitrate differs from the active encoder (njclient.cpp:1978).
+    void setLocalChannelBitrate(int index, int bitrate);
     void subscribeToAllRemoteChannels();
     void getOutputPeaks(float* left, float* right);
   
