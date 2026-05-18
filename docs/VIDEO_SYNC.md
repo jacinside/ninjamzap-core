@@ -414,7 +414,7 @@ the last fragment carries the END flag. The receiver reassembles them by GUID.
   `MaxChannels <normal> <anon>` and most ship with `MaxChannels 32 2` (the
   example config default). Video is a full channel slot — stereo audio +
   video = 3 channels, which exceeds an anon cap of 2. NinjamZap's own server
-  (`jam.ninjamzap.com:2049` and `:2050`) has the anon cap raised to 8 so
+  (`video.ninjamzap.com:2049` and `:2050`) has the anon cap raised to 8 so
   third-party clients can test video against it.
 
 ---
