@@ -10,6 +10,7 @@
 #include <functional>
 #include <vector>
 #include <cmath>
+#include <mutex>
 #endif
 
 // Simple sine wave generator for metronome sounds
@@ -164,13 +165,24 @@ public:
     // Metronome playback
     void playMetronomeTick(bool isDownbeat);
   
-    // Método para invalidar el caché cuando sea necesario
+    // Invalidate the cache. Thread-safe: serialized with getCachedRemoteUsers
+    // via usersCacheMutex so a connection-thread invalidation cannot race a
+    // read in progress.
     void invalidateUsersCache() {
+        std::lock_guard<std::mutex> lock(usersCacheMutex);
         usersCacheValid = false;
     }
 
-    // Método para obtener usuarios (usando caché si es posible)
+    // Returns a copy of the cached remote users, refilling from the underlying
+    // NjClient if invalidated. Called from multiple threads (UI bridge, audio
+    // render callback in VU updates). The std::vector copy on return is not
+    // safe to race against a concurrent move-assign in another thread — build
+    // 130 crashed on iPhone 17 (iOS 26.5) inside malloc when the audio render
+    // thread tried to copy the vector while another thread was refilling it.
+    // The mutex briefly blocks the audio render thread; acceptable because
+    // the vector is tiny (a handful of remote users) and writes are rare.
     std::vector<AbNinjam::Common::RemoteUser> getCachedRemoteUsers() {
+        std::lock_guard<std::mutex> lock(usersCacheMutex);
         if (!usersCacheValid) {
             usersCache = client->getRemoteUsers();
             usersCacheValid = true;
@@ -202,6 +214,7 @@ private:
     // Caché para usuarios remotos
     std::vector<AbNinjam::Common::RemoteUser> usersCache;
     bool usersCacheValid = false;
+    std::mutex usersCacheMutex;
     
   // Private helper methods
     void setupInitialState();
