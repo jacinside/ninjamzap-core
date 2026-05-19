@@ -64,7 +64,10 @@ private:
     // Config
     static constexpr int SAMPLE_RATE = 48000;
     static constexpr int CHANNELS = 2;
-    static constexpr int BIT_RATE = 128000;
+    // 256 kbps matches iOS SessionRecorder.swift (`let bitRate: Int = 256000`).
+    // Bumped on develop in commit 32d259c — was 128 kbps which sounded squashed
+    // for music. AAC-LC at 256 kbps is transparent for stereo content.
+    static constexpr int BIT_RATE = 256000;
     static constexpr int RING_BUFFER_SECONDS = 2;
     static constexpr int RING_BUFFER_SIZE = SAMPLE_RATE * RING_BUFFER_SECONDS;
     static constexpr int ENCODE_INTERVAL_MS = 50;

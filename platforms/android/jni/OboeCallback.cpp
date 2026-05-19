@@ -1,4 +1,5 @@
 #include "OboeCallback.h"
+#include "abNinjam/ninjamclientAdapter.h"
 #include <android/log.h>
 #include <cmath>
 #include <cstring>
@@ -71,24 +72,35 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
         m_fxProcessor->process(m_inLeft, m_inRight, framesToProcess);
     }
 
-    // Process through NINJAM (mixes local input with remote streams)
+    // Process through NINJAM. Use processAudio3 with a separate metronome
+    // bus so the recording tap can omit it (metronome-free recording — iOS
+    // parity per AudioSessionManager.swift:682 + develop commit 32d259c).
+    // Requires Kotlin to have called setMetronomeChannel(2 | 1024) at session
+    // start; otherwise outMetro stays silent and behavior matches the old
+    // processAudioSIMD path (metronome mixed into outLeft/outRight).
     memset(m_outLeft, 0, framesToProcess * sizeof(float));
     memset(m_outRight, 0, framesToProcess * sizeof(float));
+    memset(m_outMetro, 0, framesToProcess * sizeof(float));
 
-    if (m_client) {
-        NinjamClient_processAudioSIMD(
-            m_client,
+    if (m_client && m_client->adapter) {
+        auto* adapter = static_cast<NinjamClientAdapter*>(m_client->adapter);
+        adapter->processAudio3(
             m_inLeft, m_inRight,
             m_outLeft, m_outRight,
+            m_outMetro,
             framesToProcess
         );
     }
 
-    // Track output peaks
+    // Track output peaks (music only, metronome excluded — matches what the
+    // VU meters represented before).
     m_outputPeakL.store(calculatePeak(m_outLeft, framesToProcess), std::memory_order_relaxed);
     m_outputPeakR.store(calculatePeak(m_outRight, framesToProcess), std::memory_order_relaxed);
 
-    // Recording tap: capture output + input mix (same as iOS)
+    // Recording tap: capture music + local input (NO metronome). Mirrors
+    // iOS AppleAudioEngine which sends bus0/bus1 to the recorder but not
+    // bus2 (the metronome). Local mic is included so the musician hears
+    // themselves on playback even if direct monitoring routed mic elsewhere.
     if (m_recorder && m_recorder->isRecording()) {
         float recL[MAX_FRAMES];
         float recR[MAX_FRAMES];
@@ -97,6 +109,13 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
             recR[i] = m_outRight[i] + m_inRight[i];
         }
         m_recorder->writeSamples(recL, recR, framesToProcess);
+    }
+
+    // Mix metronome into speakers AFTER the recording tap so the user still
+    // hears the click in real time but the recording file is metronome-free.
+    for (int32_t i = 0; i < framesToProcess; i++) {
+        m_outLeft[i]  += m_outMetro[i];
+        m_outRight[i] += m_outMetro[i];
     }
 
     // Interleave output for Oboe (stereo output stream)
