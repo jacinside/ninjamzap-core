@@ -946,6 +946,31 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetInputSessionId(
     return static_cast<jint>(eng->getInputSessionId());
 }
 
+// Per-channel Vorbis bitrate — drives the connection screen's Audio Quality
+// picker (Quick/Standard/High/Studio). Mirrors iOS calling
+// NinjamClient_setLocalChannelBitrate (introduced in develop submodule
+// commit 044812d). Direct adapter access stays Android-only.
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetLocalChannelBitrate(
+    JNIEnv* env, jobject thiz, jlong clientPtr, jint channelIndex, jint bitrate) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    if (!client || !client->adapter) return;
+    auto* adapter = static_cast<NinjamClientAdapter*>(client->adapter);
+    adapter->setLocalChannelBitrate(static_cast<int>(channelIndex), static_cast<int>(bitrate));
+}
+
+// Routes the metronome to a dedicated channel mask so SessionRecorder can
+// exclude it from the recorded mix. iOS uses `2 | 1024` to send metronome
+// to the recording-only channel (develop submodule commit 1d2094e).
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetMetronomeChannel(
+    JNIEnv* env, jobject thiz, jlong clientPtr, jint chidx) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    if (!client || !client->adapter) return;
+    auto* adapter = static_cast<NinjamClientAdapter*>(client->adapter);
+    adapter->setMetronomeChannel(static_cast<int>(chidx));
+}
+
 // ============================================================================
 // License response (parity with iOS: releases C++ condition_variable in
 // abNinjam ninjamclient.cpp's licensecallback). Without this, the C++ thread

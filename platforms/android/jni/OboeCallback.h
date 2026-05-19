@@ -62,6 +62,10 @@ private:
     float m_inRight[MAX_FRAMES] = {};
     float m_outLeft[MAX_FRAMES] = {};
     float m_outRight[MAX_FRAMES] = {};
+    // Metronome rendered separately by processAudio3 so we can mix it into
+    // speakers but skip it for the recording tap (metronome-free recording,
+    // iOS parity per AudioSessionManager.swift:682 / develop commit 32d259c).
+    float m_outMetro[MAX_FRAMES] = {};
 
     // Peak tracking (atomic for cross-thread access)
     std::atomic<float> m_outputPeakL{0.0f};
