@@ -129,6 +129,13 @@ void NinjamClient_processAudio(NinjamClientRef* client, float* inBufferLeft, flo
     }
 }
 
+void NinjamClient_processAudioN(NinjamClientRef* client, float** inChannels, int32_t innch, float* outBufferLeft, float* outBufferRight, float* outBufferMetro, int32_t numFrames) {
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        adapter->processAudioN(inChannels, innch, outBufferLeft, outBufferRight, outBufferMetro, numFrames);
+    }
+}
+
 void NinjamClient_submitAudioData(NinjamClientRef* client, int32_t channelIndex, const float* data, int32_t numFrames) {
     auto adapter = getAdapter(client);
     if (adapter) {
@@ -485,8 +492,27 @@ int NinjamClient_getUserChannelCount(NinjamClientRef* client, const char* userna
             return static_cast<int>(user.channels.size());
         }
     }
-    
+
     return 0;
+}
+
+int NinjamClient_getUserChannelIdAt(NinjamClientRef* client, const char* username, int32_t ordinal) {
+    auto adapter = getAdapter(client);
+    if (!adapter || !username || ordinal < 0) {
+        return -1;
+    }
+    // The cache holds only the user's real channels (gaps already skipped),
+    // each keeping its true channel index in `.id`. Map ordinal -> real id.
+    std::vector<AbNinjam::Common::RemoteUser> users = adapter->getCachedRemoteUsers();
+    for (const auto& user : users) {
+        if (user.name == username) {
+            if (ordinal < static_cast<int>(user.channels.size())) {
+                return user.channels[ordinal].id;
+            }
+            return -1;
+        }
+    }
+    return -1;
 }
 
 void NinjamClient_setRemoteChannelVolume(NinjamClientRef* client, const char* username, int channelIndex, float volume) {

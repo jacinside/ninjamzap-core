@@ -51,6 +51,13 @@ void NinjamClient_setAudioConfig(NinjamClientRef* client, int32_t sampleRate, in
 //void NinjamClient_processAudio(NinjamClientRef* client, float* inBuffer, float* outBuffer, int32_t numFrames);
 void NinjamClient_processAudio(NinjamClientRef* client, float* inBufferLeft, float* inBufferRight, float* outBufferLeft, float* outBufferRight, int32_t numFrames);
 
+// Takes N deinterleaved hardware input channels (inChannels[0..innch-1])
+// instead of a fixed stereo pair. Each local channel picks which of those
+// inputs it encodes via the srcch set through NinjamClient_setLocalChannelInfo,
+// enabling multiple local channels sourced from different physical inputs of
+// a multi-channel interface. Output stays stereo music + mono metronome.
+void NinjamClient_processAudioN(NinjamClientRef* client, float** inChannels, int32_t innch, float* outBufferLeft, float* outBufferRight, float* outBufferMetro, int32_t numFrames);
+
 // Streamlined audio processing function for zero-copy operations
 OSStatus NinjamClient_processAudioStreamlined(NinjamClientRef* client, const float* inBufferLeft, const float* inBufferRight, float* outBufferLeft, float* outBufferRight, uint32_t numFrames, const AudioTimeStamp* timestamp);
 
@@ -101,6 +108,13 @@ const char** NinjamClient_getRemoteUserNames(NinjamClientRef* client, int* count
 void NinjamClient_freeRemoteUserNames(const char** userNames, int count);
 void NinjamClient_invalidateUsersCache(NinjamClientRef* client);
 int NinjamClient_getUserChannelCount(NinjamClientRef* client, const char* username);
+// Returns the real channel index of the `ordinal`-th channel of `username`
+// (ordinal 0..count-1). A remote user's channels can be sparse — when a peer
+// disables a mid-list channel (e.g. video), the indices have gaps. The cache
+// stores only real channels, each keeping its true index, so callers must map
+// ordinal -> real index instead of assuming 0..count-1 are all present.
+// Returns -1 if the user or ordinal is out of range.
+int NinjamClient_getUserChannelIdAt(NinjamClientRef* client, const char* username, int32_t ordinal);
 void NinjamClient_setRemoteChannelVolume(NinjamClientRef* client, const char* username, int channelIndex, float volume);
 void NinjamClient_setLocalChannelVolume(NinjamClientRef* client, int channelIndex, float volume);
 

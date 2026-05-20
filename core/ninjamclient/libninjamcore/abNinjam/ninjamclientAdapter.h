@@ -136,7 +136,22 @@ public:
         float* outBufferRight,
         float* outBufferMetro,
         int numFrames);
-    
+
+    // Like processAudio3() but accepts N deinterleaved hardware input
+    // channels instead of a fixed stereo pair. All N channels are forwarded
+    // to NJClient::AudioProc as innch; each local channel then selects which
+    // of them it encodes via the srcch index set through SetLocalChannelInfo.
+    // This is what enables multiple local channels sourced from different
+    // physical inputs (e.g. ch 1+2 and ch 3+4 of a USB interface). Output
+    // stays stereo music + mono metronome, exactly like processAudio3().
+    void processAudioN(
+        float** inChannels,
+        int innch,
+        float* outBufferLeft,
+        float* outBufferRight,
+        float* outBufferMetro,
+        int numFrames);
+
     // Master volume controls
     void setMasterVolume(float volume, float pan, bool mute);
     
@@ -233,7 +248,13 @@ private:
     // Mono staging buffer for the metronome output channel when using
     // processAudio3(). Allocated alongside outputBuffer in the same path.
     float*  metroOutputBuffer;
-    
+    // Multi-channel input staging for processAudioN(). Holds up to
+    // inputBufferNCount deinterleaved hardware input channels. Kept separate
+    // from inputBuffer (which stays 2-channel for processAudio/processAudio3)
+    // so the legacy paths are untouched. Allocated once in setAudioConfig().
+    float** inputBufferN;
+    int     inputBufferNCount;
+
     // Metronome settings
     bool metronomeEnabled;
     float metronomeVolume;

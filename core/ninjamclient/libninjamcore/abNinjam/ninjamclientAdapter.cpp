@@ -32,6 +32,8 @@ NinjamClientAdapter::NinjamClientAdapter()
     , inputBuffer(nullptr)
     , outputBuffer(nullptr)
     , metroOutputBuffer(nullptr)
+    , inputBufferN(nullptr)
+    , inputBufferNCount(0)
     , metronomeEnabled(true)
     , metronomeVolume(0.5f)
     , metronomePan(0.0f)
@@ -66,6 +68,13 @@ NinjamClientAdapter::~NinjamClientAdapter() {
     }
 
     delete[] metroOutputBuffer;
+
+    if (inputBufferN) {
+        for (int i = 0; i < inputBufferNCount; i++) {
+            delete[] inputBufferN[i];
+        }
+        delete[] inputBufferN;
+    }
 
     delete client;
 }
@@ -291,6 +300,17 @@ void NinjamClientAdapter::setAudioConfig(int sampleRate, int channels) {
     if (!metroOutputBuffer) {
         metroOutputBuffer = new float[8192];
     }
+
+    // Multi-channel input staging for processAudioN(). Fixed max-channel
+    // allocation done once — covers any USB interface channel count we
+    // realistically support (free tier 4, Pro up to 16). Freed in destructor.
+    if (!inputBufferN) {
+        inputBufferNCount = 16;
+        inputBufferN = new float*[inputBufferNCount];
+        for (int i = 0; i < inputBufferNCount; i++) {
+            inputBufferN[i] = new float[8192];
+        }
+    }
 }
 
 void NinjamClientAdapter::processAudio(
@@ -403,6 +423,9 @@ void NinjamClientAdapter::sendAudio(const float* data, int size, int channelInde
 
 void NinjamClientAdapter::removeLocalChannel(int channelIndex) {
     client->gsNjClient()->DeleteLocalChannel(channelIndex);
+    // Tell the server the channel set changed so other clients drop the
+    // removed channel — DeleteLocalChannel alone doesn't notify.
+    client->gsNjClient()->NotifyServerOfChannelChange();
 }
 
 void NinjamClientAdapter::setLocalChannelMonitoring(int index, float volume, float pan, bool mute, bool solo) {
@@ -533,6 +556,64 @@ void NinjamClientAdapter::processAudio3(
     // outbuf[2] and skips outbuf[3] (mono mode).
     float* outbufs[3] = { outputBuffer[0], outputBuffer[1], metroOutputBuffer };
     client->audiostreamOnSamples(inputBuffer, numChannels, outbufs, 3, numFrames, sampleRate);
+
+    if (outBufferLeft)  memcpy(outBufferLeft,  outputBuffer[0],   numFrames * sizeof(float));
+    if (outBufferRight) memcpy(outBufferRight, outputBuffer[1],   numFrames * sizeof(float));
+    if (outBufferMetro) memcpy(outBufferMetro, metroOutputBuffer, numFrames * sizeof(float));
+}
+
+void NinjamClientAdapter::processAudioN(
+    float** inChannels,
+    int innch,
+    float* outBufferLeft,
+    float* outBufferRight,
+    float* outBufferMetro,
+    int numFrames
+) {
+    this->numFrames = numFrames;
+
+    if (!connected || numFrames <= 0) {
+        if (outBufferLeft)  memset(outBufferLeft,  0, sizeof(float) * numFrames);
+        if (outBufferRight) memset(outBufferRight, 0, sizeof(float) * numFrames);
+        if (outBufferMetro) memset(outBufferMetro, 0, sizeof(float) * numFrames);
+        return;
+    }
+
+    // Clamp innch to the staging capacity. NJClient reads inbuf[0..innch-1];
+    // a local channel whose srcch points past innch would read garbage, so
+    // the caller must pass enough channels to cover every active local
+    // channel's source (the engine passes the full hardware channel count).
+    int n = innch;
+    if (n < 1) n = 1;
+    if (n > inputBufferNCount) n = inputBufferNCount;
+
+    // Stage each input channel into our owned buffers so NJClient never sees
+    // caller memory directly (matches processAudio/processAudio3 contract).
+    for (int c = 0; c < n; c++) {
+        if (inChannels && inChannels[c]) {
+            memcpy(inputBufferN[c], inChannels[c], numFrames * sizeof(float));
+        } else {
+            memset(inputBufferN[c], 0, numFrames * sizeof(float));
+        }
+    }
+
+    // Mono engine fallback — not expected on iOS (output is always stereo),
+    // but keeps the contract safe without depending on outputBuffer[1].
+    if (numChannels < 2) {
+        client->audiostreamOnSamples(inputBufferN, n, outputBuffer, numChannels, numFrames, sampleRate);
+        if (outBufferLeft)  memcpy(outBufferLeft, outputBuffer[0], numFrames * sizeof(float));
+        if (outBufferRight && numChannels > 1) memcpy(outBufferRight, outputBuffer[1], numFrames * sizeof(float));
+        if (outBufferMetro) memset(outBufferMetro, 0, numFrames * sizeof(float));
+        return;
+    }
+
+    // Zero the metronome staging — see processAudio3() for the rationale.
+    memset(metroOutputBuffer, 0, numFrames * sizeof(float));
+
+    // 3-channel output: outbuf[0/1] = stereo music mix, outbuf[2] = metronome.
+    // Requires setMetronomeChannel(2 | 1024), same as processAudio3().
+    float* outbufs[3] = { outputBuffer[0], outputBuffer[1], metroOutputBuffer };
+    client->audiostreamOnSamples(inputBufferN, n, outbufs, 3, numFrames, sampleRate);
 
     if (outBufferLeft)  memcpy(outBufferLeft,  outputBuffer[0],   numFrames * sizeof(float));
     if (outBufferRight) memcpy(outBufferRight, outputBuffer[1],   numFrames * sizeof(float));
