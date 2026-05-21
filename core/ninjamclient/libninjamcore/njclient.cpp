@@ -2311,6 +2311,7 @@ void NJClient::process_samples(float **inbuf, int innch, float **outbuf, int out
   {
     Local_Channel *lc=m_locchannels.Get(u);
     if (!justmonitor && lc->channel_idx >= m_max_localch) continue; // server does not allow this channel index
+    if (lc->flags & 0x10) continue; // skip video-only channels in monitor mix (avoids L→R bleed when camera is on)
 
     int sc=lc->src_channel&1023;
     int sc_nch=(lc->src_channel&1024)?2:1;
