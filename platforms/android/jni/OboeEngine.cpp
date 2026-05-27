@@ -35,7 +35,25 @@ bool OboeEngine::start(int32_t sampleRate, int32_t framesPerBuffer) {
     m_sampleRate = sampleRate;
     m_framesPerBuffer = framesPerBuffer;
 
-    LOGI("Starting audio engine: %dHz, %d frames/buffer", sampleRate, framesPerBuffer);
+    // Derive latency profile from framesPerBuffer (passed by Kotlin as
+    // FeaturesFlags.inputBufferSize). JS calls setFeatureFlag BEFORE the
+    // engine exists, so the JS→Kotlin pathway can't push setLatencyProfile
+    // in time — apply the same mapping here at engine start so the first
+    // openOutput/openInput pair already gets the right buffer multiplier
+    // and performance mode.
+    if (framesPerBuffer <= 128) {
+        m_bufferMultiplier.store(2);
+        m_performanceMode = oboe::PerformanceMode::LowLatency;
+    } else if (framesPerBuffer <= 256) {
+        m_bufferMultiplier.store(2);
+        m_performanceMode = oboe::PerformanceMode::LowLatency;
+    } else {
+        m_bufferMultiplier.store(3);
+        m_performanceMode = oboe::PerformanceMode::None;
+    }
+    LOGI("Starting audio engine: %dHz, %d frames/buffer (latency profile: multiplier=%d perfMode=%s)",
+         sampleRate, framesPerBuffer,
+         m_bufferMultiplier.load(), oboe::convertToText(m_performanceMode));
 
     // Open output first (it drives the callback)
     if (!openOutputStream()) {
@@ -138,6 +156,22 @@ int32_t OboeEngine::getFramesPerBuffer() const {
     return m_framesPerBuffer;
 }
 
+int32_t OboeEngine::getOutputBurst() const {
+    return m_outputStream ? m_outputStream->getFramesPerBurst() : 0;
+}
+
+int32_t OboeEngine::getOutputBufferSize() const {
+    return m_outputStream ? m_outputStream->getBufferSizeInFrames() : 0;
+}
+
+int32_t OboeEngine::getInputBurst() const {
+    return m_inputStream ? m_inputStream->getFramesPerBurst() : 0;
+}
+
+int32_t OboeEngine::getInputBufferSize() const {
+    return m_inputStream ? m_inputStream->getBufferSizeInFrames() : 0;
+}
+
 void OboeEngine::getOutputPeaks(float* left, float* right) const {
     m_callback->getOutputPeaks(left, right);
 }
@@ -178,22 +212,41 @@ void OboeEngine::setInputPreset(oboe::InputPreset preset) {
     }
 }
 
+void OboeEngine::setLatencyProfile(int profile) {
+    int32_t multiplier;
+    oboe::PerformanceMode mode;
+    switch (profile) {
+        case 0: multiplier = 2; mode = oboe::PerformanceMode::LowLatency; break;  // ultra_low
+        case 1: multiplier = 2; mode = oboe::PerformanceMode::LowLatency; break;  // low
+        case 2:
+        default: multiplier = 3; mode = oboe::PerformanceMode::None;       break; // safe
+    }
+    int32_t prevMult = m_bufferMultiplier.exchange(multiplier);
+    oboe::PerformanceMode prevMode = m_performanceMode;
+    m_performanceMode = mode;
+    if (prevMult == multiplier && prevMode == mode) return;
+    LOGI("Latency profile: %d (multiplier=%d perfMode=%s) — reopening",
+         profile, multiplier, oboe::convertToText(mode));
+    std::lock_guard<std::mutex> lock(m_streamMutex);
+    if (m_running.load()) {
+        reopenStreamsLocked();
+    }
+}
+
 // ============================================================================
 // Private
 // ============================================================================
 
 bool OboeEngine::openOutputStream() {
-    // When the user has explicitly picked an output device, fall back to
-    // Shared sharing mode. Exclusive (MMAP) ignores setDeviceId on many HAL
-    // endpoints (only the default endpoint is exclusive-capable), so an
-    // explicit pick would silently route to default. Shared honors the
-    // device ID universally at the small cost of one extra HW mixer hop —
-    // acceptable on the route-change path. Auto (kUnspecified) keeps the
-    // low-latency Exclusive path.
+    // Try Exclusive (MMAP) FIRST regardless of deviceId — bypasses the
+    // AAudio system mixer for ~5–10 ms less audible latency. The historical
+    // concern was that Exclusive can ignore setDeviceId and silently route
+    // to the platform default endpoint; we guard against that explicitly
+    // below by comparing requested vs actual deviceId after open and
+    // retrying as Shared if they don't match. This is the only knob that
+    // moves audible latency below ~30 ms on Oboe-based Android audio.
     int32_t devId = m_outputDeviceId.load();
-    oboe::SharingMode sharing = (devId == oboe::kUnspecified)
-        ? m_sharingMode
-        : oboe::SharingMode::Shared;
+    oboe::SharingMode sharing = oboe::SharingMode::Exclusive;
     oboe::AudioStreamBuilder builder;
     builder.setDirection(oboe::Direction::Output)
            ->setPerformanceMode(m_performanceMode)
@@ -208,16 +261,52 @@ bool OboeEngine::openOutputStream() {
            ->setUsage(oboe::Usage::Game);  // Low-latency usage hint
 
     oboe::Result result = builder.openStream(m_outputStream);
+
+    // If Exclusive routed us to a different deviceId than requested (HAL
+    // doesn't support Exclusive on this endpoint), close and retry as
+    // Shared so the explicit device pick is honored.
+    if (result == oboe::Result::OK && devId != oboe::kUnspecified &&
+        m_outputStream->getDeviceId() != devId) {
+        LOGI("Exclusive output routed to deviceId=%d but requested %d — retrying Shared",
+             m_outputStream->getDeviceId(), devId);
+        m_outputStream->close();
+        m_outputStream.reset();
+        builder.setSharingMode(oboe::SharingMode::Shared);
+        sharing = oboe::SharingMode::Shared;
+        result = builder.openStream(m_outputStream);
+    }
+
     if (result != oboe::Result::OK) {
-        LOGE("Failed to open output stream: %s", oboe::convertToText(result));
-        return false;
+        // Final fallback: if Exclusive failed outright, try Shared once.
+        if (sharing == oboe::SharingMode::Exclusive) {
+            LOGI("Exclusive output open failed (%s) — retrying Shared",
+                 oboe::convertToText(result));
+            builder.setSharingMode(oboe::SharingMode::Shared);
+            sharing = oboe::SharingMode::Shared;
+            result = builder.openStream(m_outputStream);
+        }
+        if (result != oboe::Result::OK) {
+            LOGE("Failed to open output stream: %s", oboe::convertToText(result));
+            return false;
+        }
     }
 
     // Update sample rate to what the device actually gave us
     m_sampleRate = m_outputStream->getSampleRate();
-    LOGI("Output stream opened: requested deviceId=%d actual deviceId=%d sharing=%s",
+
+    // Shrink the queue depth to (burst × multiplier). Default is much larger
+    // for jitter safety; trimming it is the only knob that meaningfully
+    // reduces audible latency on the Oboe path. The actual value AAudio
+    // grants may be larger than requested.
+    int32_t outBurst = m_outputStream->getFramesPerBurst();
+    int32_t requestedOutBuf = outBurst * m_bufferMultiplier.load();
+    auto outBufRes = m_outputStream->setBufferSizeInFrames(requestedOutBuf);
+    int32_t actualOutBuf = outBufRes ? outBufRes.value() : m_outputStream->getBufferSizeInFrames();
+    LOGI("Output stream opened: requested deviceId=%d actual deviceId=%d sharing=%s perfMode=%s burst=%d bufSize req=%d actual=%d",
          m_outputDeviceId.load(), m_outputStream->getDeviceId(),
-         oboe::convertToText(m_outputStream->getSharingMode()));
+         oboe::convertToText(m_outputStream->getSharingMode()),
+         oboe::convertToText(m_outputStream->getPerformanceMode()),
+         outBurst, requestedOutBuf, actualOutBuf);
     return true;
 }
 
@@ -225,7 +314,7 @@ bool OboeEngine::openInputStream() {
     oboe::AudioStreamBuilder builder;
     builder.setDirection(oboe::Direction::Input)
            ->setPerformanceMode(m_performanceMode)
-           ->setSharingMode(oboe::SharingMode::Shared)  // Input usually needs Shared
+           ->setSharingMode(oboe::SharingMode::Exclusive)  // Try MMAP first; fall back to Shared below if rejected
            ->setFormat(oboe::AudioFormat::Float)
            // Open input as stereo. The built-in mic delivers mono (Android
            // up-mixes mono → stereo cleanly) but USB interfaces like the iRig
@@ -245,13 +334,35 @@ bool OboeEngine::openInputStream() {
            ->setInputPreset(m_inputPreset.load());  // VoicePerformance default; Unprocessed during video
 
     oboe::Result result = builder.openStream(m_inputStream);
-    if (result != oboe::Result::OK) {
-        LOGE("Failed to open input stream: %s", oboe::convertToText(result));
-        return false;
+
+    int32_t inDevId = m_inputDeviceId.load();
+    if (result == oboe::Result::OK && inDevId != oboe::kUnspecified &&
+        m_inputStream->getDeviceId() != inDevId) {
+        LOGI("Exclusive input routed to deviceId=%d but requested %d — retrying Shared",
+             m_inputStream->getDeviceId(), inDevId);
+        m_inputStream->close();
+        m_inputStream.reset();
+        builder.setSharingMode(oboe::SharingMode::Shared);
+        result = builder.openStream(m_inputStream);
     }
-    LOGI("Input stream opened: requested deviceId=%d actual deviceId=%d sharing=%s",
+    if (result != oboe::Result::OK) {
+        LOGI("Exclusive input open failed (%s) — retrying Shared",
+             oboe::convertToText(result));
+        builder.setSharingMode(oboe::SharingMode::Shared);
+        result = builder.openStream(m_inputStream);
+        if (result != oboe::Result::OK) {
+            LOGE("Failed to open input stream: %s", oboe::convertToText(result));
+            return false;
+        }
+    }
+    int32_t inBurst = m_inputStream->getFramesPerBurst();
+    int32_t requestedInBuf = inBurst * m_bufferMultiplier.load();
+    auto inBufRes = m_inputStream->setBufferSizeInFrames(requestedInBuf);
+    int32_t actualInBuf = inBufRes ? inBufRes.value() : m_inputStream->getBufferSizeInFrames();
+    LOGI("Input stream opened: requested deviceId=%d actual deviceId=%d sharing=%s burst=%d bufSize req=%d actual=%d",
          m_inputDeviceId.load(), m_inputStream->getDeviceId(),
-         oboe::convertToText(m_inputStream->getSharingMode()));
+         oboe::convertToText(m_inputStream->getSharingMode()),
+         inBurst, requestedInBuf, actualInBuf);
     return true;
 }
 

@@ -46,6 +46,12 @@ public:
     // Get the actual frames per buffer
     int32_t getFramesPerBuffer() const;
 
+    // Latency metric helpers — return 0 when the stream isn't open.
+    int32_t getOutputBurst() const;
+    int32_t getOutputBufferSize() const;
+    int32_t getInputBurst() const;
+    int32_t getInputBufferSize() const;
+
     // Peak levels (thread-safe, called from UI thread)
     void getOutputPeaks(float* left, float* right) const;
     void getInputPeaks(float* left, float* right) const;
@@ -75,6 +81,14 @@ public:
     // Change input preset (Unprocessed vs VoicePerformance). When the engine
     // is running, the input stream is reopened so the new preset takes effect.
     void setInputPreset(oboe::InputPreset preset);
+
+    // Latency profile: 0=ultra_low (2× burst, LowLatency), 1=low (2× burst,
+    // LowLatency), 2=safe (3× burst, None). Maps the iOS-style "latency
+    // preset" radio in the connection screen to actual Oboe knobs. Without
+    // this, all three presets behave identically on Android because the
+    // legacy flags (PreferredIOBufferDuration, ring buffer settings) are
+    // no-ops on the Oboe path. Triggers a stream reopen when running.
+    void setLatencyProfile(int profile);
 
 private:
     // Streams
@@ -111,6 +125,11 @@ private:
     // openInputStream(). Defaults to VoicePerformance (low-latency mic path);
     // switched to Unprocessed when camera starts to disable HAL AGC/AEC/NS.
     std::atomic<oboe::InputPreset> m_inputPreset{oboe::InputPreset::VoicePerformance};
+
+    // Buffer-size multiplier applied to stream burst after open. Lower =
+    // less queue (lower latency, more underrun risk). Default 3× matches
+    // Oboe's "safe" default; ultra_low/low presets bring it down to 2×.
+    std::atomic<int32_t> m_bufferMultiplier{3};
 
     // Helpers
     bool openOutputStream();

@@ -107,6 +107,28 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
         );
     }
 
+    // Direct monitor — iOS parity. When enabled, mix the post-FX / post-
+    // localGain mic samples straight into the output bus inside this audio
+    // callback, bypassing NJClient's processing latency for the audible
+    // monitor path. Mirrors iOS AppleAudioEngine.swift:1359-1366 which
+    // connects inputNode → mixer when directMonitor=true ("ULTRA-LOW
+    // LATENCY MODE").
+    //
+    // Caller contract: when m_directMonitor=true, the Kotlin/JS layer keeps
+    // NJClient.muted=TRUE so processAudio3 doesn't also mix the local
+    // channel into m_outLeft/m_outRight (which would be a double monitor).
+    // When the user hits mute or auto-mute fires, JS sets m_directMonitor
+    // =false; processAudio3 stays silent for the local channel too because
+    // NJClient.muted is still true → user hears nothing local. Broadcasting
+    // to the server is independent (lc->broadcasting), so muting the
+    // monitor does NOT stop the server send.
+    if (m_directMonitor.load(std::memory_order_relaxed)) {
+        for (int32_t i = 0; i < framesToProcess; i++) {
+            m_outLeft[i]  += m_inLeft[i];
+            m_outRight[i] += m_inRight[i];
+        }
+    }
+
     // Recording tap: capture music + local input (NO metronome). Mirrors
     // iOS AppleAudioEngine which sends bus0/bus1 to the recorder but not
     // bus2 (the metronome). Local mic is included so the musician hears

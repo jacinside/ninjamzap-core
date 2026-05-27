@@ -955,11 +955,26 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetOutputDeviceId(
     eng->setOutputDeviceId(static_cast<int32_t>(deviceId));
 }
 
+// Returns [outBurst, outBufSize, inBurst, inBufSize, sampleRate].
+// Kotlin pulls this for the latency metric in Settings. Empty array means
+// the engine isn't running yet.
 JNIEXPORT jfloatArray JNICALL
 Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamMetrics(
     JNIEnv* env, jobject thiz, jlong enginePtr) {
-    (void)enginePtr;
-    return env->NewFloatArray(0);
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng || !eng->isRunning()) {
+        return env->NewFloatArray(0);
+    }
+    float values[5] = {
+        static_cast<float>(eng->getOutputBurst()),
+        static_cast<float>(eng->getOutputBufferSize()),
+        static_cast<float>(eng->getInputBurst()),
+        static_cast<float>(eng->getInputBufferSize()),
+        static_cast<float>(eng->getSampleRate()),
+    };
+    jfloatArray arr = env->NewFloatArray(5);
+    env->SetFloatArrayRegion(arr, 0, 5, values);
+    return arr;
 }
 
 JNIEXPORT jint JNICALL
@@ -982,6 +997,16 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetInputPreset(
     auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
     if (!eng) return;
     eng->setInputPreset(static_cast<oboe::InputPreset>(preset));
+}
+
+// Apply a connection-screen latency profile (0=ultra_low, 1=low, 2=safe).
+// Maps to Oboe buffer multiplier + performance mode and reopens streams.
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetLatencyProfile(
+    JNIEnv* env, jobject thiz, jlong enginePtr, jint profile) {
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return;
+    eng->setLatencyProfile(static_cast<int>(profile));
 }
 
 // Per-channel Vorbis bitrate — drives the connection screen's Audio Quality
