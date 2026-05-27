@@ -50,6 +50,11 @@ public:
     void getOutputPeaks(float* left, float* right) const;
     void getInputPeaks(float* left, float* right) const;
 
+    // Direct monitor — see m_directMonitor field doc.
+    void setDirectMonitor(bool enabled) { m_directMonitor.store(enabled, std::memory_order_relaxed); }
+    void setLocalGain(float gain) { m_localGain.store(gain, std::memory_order_relaxed); }
+    void setMasterGain(float gain) { m_masterGain.store(gain, std::memory_order_relaxed); }
+
 private:
     NinjamClientRef* m_client = nullptr;
     AudioFXProcessor* m_fxProcessor = nullptr;
@@ -66,6 +71,29 @@ private:
     // speakers but skip it for the recording tap (metronome-free recording,
     // iOS parity per AudioSessionManager.swift:682 / develop commit 32d259c).
     float m_outMetro[MAX_FRAMES] = {};
+
+    // Direct monitor: bypass NJClient buffering by mixing input -> output
+    // inside this audio callback. NJClient's local channel is muted by the
+    // session manager so we don't double-mix. iOS does the equivalent by
+    // connecting `inputNode -> mixer` directly in AVAudioEngine
+    // (AppleAudioEngine.swift:1073-1077).
+    std::atomic<bool>  m_directMonitor{false};
+
+    // m_localGain: applied to m_inLeft IN PLACE before processAudio3 →
+    // scales the mic both in the direct-monitor mix AND in what NJClient
+    // sends to the server. Matches iOS built-in mic behavior where
+    // setInputGain(localVolume) scales at the hardware preamp (affects
+    // both directions equally). For USB on Android we apply the same
+    // software scaling.
+    std::atomic<float> m_localGain{1.0f};
+
+    // m_masterGain: applied to the FINAL m_outLeft / m_outRight, AFTER all
+    // mixes (NJClient music + direct monitor mic + metronome). Mirrors iOS
+    // AVAudioEngine mixer.outputVolume which catches every node feeding the
+    // mixer. NJClient's config_mastervolume already scales its own outbuf
+    // independently, so the effective scaling on remote audio is master²
+    // (same on iOS — accepted asymmetry).
+    std::atomic<float> m_masterGain{1.0f};
 
     // Peak tracking (atomic for cross-thread access)
     std::atomic<float> m_outputPeakL{0.0f};

@@ -67,6 +67,15 @@ public:
     // Returns 0 (kSessionIdNone) if the input stream isn't open.
     int32_t getInputSessionId() const;
 
+    // Forwarders to the callback's atomic flags / gains.
+    void setDirectMonitor(bool enabled);
+    void setLocalGain(float gain);
+    void setMasterGain(float gain);
+
+    // Change input preset (Unprocessed vs VoicePerformance). When the engine
+    // is running, the input stream is reopened so the new preset takes effect.
+    void setInputPreset(oboe::InputPreset preset);
+
 private:
     // Streams
     std::shared_ptr<oboe::AudioStream> m_outputStream;
@@ -97,6 +106,11 @@ private:
 
     // Serializes stream lifecycle (start / stop / live reopen on device change).
     std::mutex m_streamMutex;
+
+    // Input preset — written from JS via setInputPreset(), read inside
+    // openInputStream(). Defaults to VoicePerformance (low-latency mic path);
+    // switched to Unprocessed when camera starts to disable HAL AGC/AEC/NS.
+    std::atomic<oboe::InputPreset> m_inputPreset{oboe::InputPreset::VoicePerformance};
 
     // Helpers
     bool openOutputStream();

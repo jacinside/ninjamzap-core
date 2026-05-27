@@ -903,16 +903,40 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetFxState(JNIEnv* e
 //     lives in OptimizedAudioSession via AudioManager (Kotlin-side)
 //   - StreamMetrics: returns an empty array so callers get safe defaults
 // ============================================================================
+// Direct monitor — Android equivalent of iOS connecting inputNode -> mixer
+// in AVAudioEngine (AppleAudioEngine.swift:1073). Lets the OboeCallback mix
+// the mic into the speaker output directly, bypassing NJClient's buffering
+// for a low-latency self-monitoring path. NJClient's local channel is kept
+// muted (by NinjamSessionManager) to avoid double-mix.
 JNIEXPORT void JNICALL
 Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetDirectMonitor(
     JNIEnv* env, jobject thiz, jlong enginePtr, jboolean enabled) {
-    (void)enginePtr; (void)enabled;
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return;
+    eng->setDirectMonitor(enabled == JNI_TRUE);
 }
 
+// Local channel gain (m_inLeft *= gain before processAudio3). Despite the
+// legacy "DirectMonitor" name in the bridge, this scales the MIC samples —
+// affects both the direct-monitor mix the user hears AND what NJClient
+// sends to the server. iOS does the same via setInputGain on built-in mic.
 JNIEXPORT void JNICALL
 Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetDirectMonitorGain(
     JNIEnv* env, jobject thiz, jlong enginePtr, jfloat gain) {
-    (void)enginePtr; (void)gain;
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return;
+    eng->setLocalGain(gain);
+}
+
+// Master gain: scales the FINAL m_outLeft/m_outRight after all mixing.
+// Mirrors iOS AVAudioEngine mixer.outputVolume so the master slider catches
+// everything (NJClient output + direct-monitor mic + metronome).
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetMasterGain(
+    JNIEnv* env, jobject thiz, jlong enginePtr, jfloat gain) {
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return;
+    eng->setMasterGain(gain);
 }
 
 JNIEXPORT void JNICALL
@@ -944,6 +968,20 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetInputSessionId(
     auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
     if (!eng) return 0;
     return static_cast<jint>(eng->getInputSessionId());
+}
+
+// Toggle Oboe input preset (VoicePerformance = 10, Unprocessed = 9). Drives
+// the Android equivalent of iOS setVideoMonitorSuppression: switch to
+// Unprocessed when the camera starts so the HAL doesn't enable AGC/AEC/NS
+// behind our back (which causes "audio gets louder + feedback" on camera).
+// Caller passes the integer Oboe::InputPreset value directly to keep the
+// JNI surface simple. 9 = Unprocessed, 10 = VoicePerformance.
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetInputPreset(
+    JNIEnv* env, jobject thiz, jlong enginePtr, jint preset) {
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return;
+    eng->setInputPreset(static_cast<oboe::InputPreset>(preset));
 }
 
 // Per-channel Vorbis bitrate — drives the connection screen's Audio Quality

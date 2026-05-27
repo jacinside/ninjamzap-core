@@ -154,6 +154,30 @@ void OboeEngine::setSharingMode(oboe::SharingMode mode) {
     m_sharingMode = mode;
 }
 
+void OboeEngine::setDirectMonitor(bool enabled) {
+    if (m_callback) m_callback->setDirectMonitor(enabled);
+    LOGI("Direct monitor: %s", enabled ? "ON" : "OFF");
+}
+
+void OboeEngine::setLocalGain(float gain) {
+    if (m_callback) m_callback->setLocalGain(gain);
+}
+
+void OboeEngine::setMasterGain(float gain) {
+    if (m_callback) m_callback->setMasterGain(gain);
+}
+
+void OboeEngine::setInputPreset(oboe::InputPreset preset) {
+    oboe::InputPreset prev = m_inputPreset.exchange(preset);
+    if (prev == preset) return;
+    LOGI("Input preset changed: %d -> %d (forces input stream reopen)",
+         static_cast<int>(prev), static_cast<int>(preset));
+    std::lock_guard<std::mutex> lock(m_streamMutex);
+    if (m_running.load()) {
+        reopenStreamsLocked();
+    }
+}
+
 // ============================================================================
 // Private
 // ============================================================================
@@ -203,7 +227,13 @@ bool OboeEngine::openInputStream() {
            ->setPerformanceMode(m_performanceMode)
            ->setSharingMode(oboe::SharingMode::Shared)  // Input usually needs Shared
            ->setFormat(oboe::AudioFormat::Float)
-           ->setChannelCount(oboe::ChannelCount::Mono)   // Most mics are mono
+           // Open input as stereo. The built-in mic delivers mono (Android
+           // up-mixes mono → stereo cleanly) but USB interfaces like the iRig
+           // PRO DUO have two real channels (XLR mic + instrument). Forcing
+           // Mono on a stereo USB device collapses both inputs into one
+           // channel and we lose the second input. Stereo + the existing
+           // deinterleave path keeps the user's two inputs distinct.
+           ->setChannelCount(oboe::ChannelCount::Stereo)
            ->setSampleRate(m_sampleRate)                  // Match output sample rate
            ->setDeviceId(m_inputDeviceId.load())
            // Allocate an Android audio session ID so Kotlin can attach
@@ -212,7 +242,7 @@ bool OboeEngine::openInputStream() {
            // Without Allocate, getSessionId() returns kSessionIdNone (0) and
            // AcousticEchoCanceler.create() rejects it.
            ->setSessionId(oboe::SessionId::Allocate)
-           ->setInputPreset(oboe::InputPreset::VoicePerformance);  // Low-latency mic preset
+           ->setInputPreset(m_inputPreset.load());  // VoicePerformance default; Unprocessed during video
 
     oboe::Result result = builder.openStream(m_inputStream);
     if (result != oboe::Result::OK) {
