@@ -355,8 +355,17 @@ bool OboeEngine::openInputStream() {
             return false;
         }
     }
+    // Input buffer: keep it minimal (2× burst) for low CAPTURE latency.
+    // Do NOT apply the output's profile multiplier here — that multiplier
+    // (2-3×) exists to give the OUTPUT mixer headroom against underruns, but
+    // on the input it just adds capture latency. On devices whose mic opens
+    // with a large native burst (e.g. the Moto E40 built-in mic in Shared
+    // mode), 3× burst pushed input latency to ~120 ms; 2× keeps it tight
+    // while still absorbing one burst of jitter. Input short-reads are
+    // handled gracefully (we zero-fill the unread tail), so a small input
+    // buffer is safe.
     int32_t inBurst = m_inputStream->getFramesPerBurst();
-    int32_t requestedInBuf = inBurst * m_bufferMultiplier.load();
+    int32_t requestedInBuf = inBurst * 2;
     auto inBufRes = m_inputStream->setBufferSizeInFrames(requestedInBuf);
     int32_t actualInBuf = inBufRes ? inBufRes.value() : m_inputStream->getBufferSizeInFrames();
     LOGI("Input stream opened: requested deviceId=%d actual deviceId=%d sharing=%s burst=%d bufSize req=%d actual=%d",
