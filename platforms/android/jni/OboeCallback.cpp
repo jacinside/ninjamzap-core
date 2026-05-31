@@ -4,6 +4,37 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#if defined(__x86_64__) || defined(__i386__)
+#include <pmmintrin.h>
+#include <xmmintrin.h>
+#endif
+
+// Enable flush-to-zero / denormals-are-zero on the current (audio) thread.
+// Denormal floats (~1e-38) cost 10-100x more on the FPU; the reverb comb-filter
+// feedback decays into the denormal range when input goes silent, progressively
+// stalling the audio callback (metronome desync, UI starvation). iOS doesn't hit
+// this because Core Audio render threads already run with FTZ set by the system;
+// AAudio/Oboe does NOT, so we set it explicitly to match. Cheap (a couple of
+// instructions); guarded with thread_local so it runs once per audio thread.
+static inline void enableFlushToZeroOnce() {
+    static thread_local bool done = false;
+    if (done) return;
+    done = true;
+#if defined(__aarch64__)
+    uint64_t fpcr;
+    __asm__ __volatile__("mrs %0, fpcr" : "=r"(fpcr));
+    fpcr |= (1ULL << 24);  // FZ bit — flush denormal results to zero
+    __asm__ __volatile__("msr fpcr, %0" : : "r"(fpcr));
+#elif defined(__arm__)
+    uint32_t fpscr;
+    __asm__ __volatile__("vmrs %0, fpscr" : "=r"(fpscr));
+    fpscr |= (1U << 24);
+    __asm__ __volatile__("vmsr fpscr, %0" : : "r"(fpscr));
+#elif defined(__x86_64__) || defined(__i386__)
+    _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+    _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+#endif
+}
 
 #define LOG_TAG "NinjamOboe"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -32,6 +63,9 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
     oboe::AudioStream* outputStream,
     void* audioData,
     int32_t numFrames) {
+
+    // Must run on the audio thread before any DSP. Denormal protection.
+    enableFlushToZeroOnce();
 
     auto* outputBuffer = static_cast<float*>(audioData);
     int32_t framesToProcess = std::min(numFrames, MAX_FRAMES);
