@@ -172,6 +172,23 @@ int32_t OboeEngine::getInputBufferSize() const {
     return m_inputStream ? m_inputStream->getBufferSizeInFrames() : 0;
 }
 
+// Real measured latency in ms via Oboe's timestamp-based calculation. Unlike
+// bufferSize/sampleRate (the buffer CAPACITY — a worst-case upper bound), this
+// reflects the actual hardware-to-app latency. Only works on streams that
+// support getTimestamp (LowLatency/MMAP); returns -1 otherwise (Shared streams
+// on weak HALs), so the caller falls back to a burst-based estimate.
+double OboeEngine::getOutputLatencyMillis() const {
+    if (!m_outputStream) return -1.0;
+    auto r = m_outputStream->calculateLatencyMillis();
+    return r ? r.value() : -1.0;
+}
+
+double OboeEngine::getInputLatencyMillis() const {
+    if (!m_inputStream) return -1.0;
+    auto r = m_inputStream->calculateLatencyMillis();
+    return r ? r.value() : -1.0;
+}
+
 void OboeEngine::getOutputPeaks(float* left, float* right) const {
     m_callback->getOutputPeaks(left, right);
 }
@@ -364,13 +381,19 @@ bool OboeEngine::openInputStream() {
     // while still absorbing one burst of jitter. Input short-reads are
     // handled gracefully (we zero-fill the unread tail), so a small input
     // buffer is safe.
+    // Request a minimal 2× burst input buffer for low capture latency. AAudio
+    // may floor it higher (the Moto E40 legacy path enforces 3× ≈ 120 ms no
+    // matter what we ask — confirmed by experiment; 1× was also floored). On
+    // MMAP/low-latency-capable devices a small buffer keeps capture tight.
     int32_t inBurst = m_inputStream->getFramesPerBurst();
     int32_t requestedInBuf = inBurst * 2;
     auto inBufRes = m_inputStream->setBufferSizeInFrames(requestedInBuf);
     int32_t actualInBuf = inBufRes ? inBufRes.value() : m_inputStream->getBufferSizeInFrames();
-    LOGI("Input stream opened: requested deviceId=%d actual deviceId=%d sharing=%s burst=%d bufSize req=%d actual=%d",
-         m_inputDeviceId.load(), m_inputStream->getDeviceId(),
+    LOGI("Input stream opened: deviceId=%d sharing=%s api=%s perfMode=%s burst=%d bufSize req=%d actual=%d",
+         m_inputStream->getDeviceId(),
          oboe::convertToText(m_inputStream->getSharingMode()),
+         oboe::convertToText(m_inputStream->getAudioApi()),
+         oboe::convertToText(m_inputStream->getPerformanceMode()),
          inBurst, requestedInBuf, actualInBuf);
     return true;
 }

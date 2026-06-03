@@ -51,6 +51,9 @@ public:
     int32_t getOutputBufferSize() const;
     int32_t getInputBurst() const;
     int32_t getInputBufferSize() const;
+    // Real measured latency (ms) via Oboe timestamps; -1 if unsupported.
+    double getOutputLatencyMillis() const;
+    double getInputLatencyMillis() const;
 
     // Peak levels (thread-safe, called from UI thread)
     void getOutputPeaks(float* left, float* right) const;

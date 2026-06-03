@@ -955,9 +955,11 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetOutputDeviceId(
     eng->setOutputDeviceId(static_cast<int32_t>(deviceId));
 }
 
-// Returns [outBurst, outBufSize, inBurst, inBufSize, sampleRate].
-// Kotlin pulls this for the latency metric in Settings. Empty array means
-// the engine isn't running yet.
+// Returns [outBurst, outBufSize, inBurst, inBufSize, sampleRate,
+//          outLatencyMs, inLatencyMs]. The last two are Oboe's real
+// timestamp-based latency (-1 when the stream can't report it, e.g. Shared
+// streams on weak HALs — Kotlin then falls back to a burst estimate). Empty
+// array means the engine isn't running yet.
 JNIEXPORT jfloatArray JNICALL
 Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamMetrics(
     JNIEnv* env, jobject thiz, jlong enginePtr) {
@@ -965,15 +967,17 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamMetrics(
     if (!eng || !eng->isRunning()) {
         return env->NewFloatArray(0);
     }
-    float values[5] = {
+    float values[7] = {
         static_cast<float>(eng->getOutputBurst()),
         static_cast<float>(eng->getOutputBufferSize()),
         static_cast<float>(eng->getInputBurst()),
         static_cast<float>(eng->getInputBufferSize()),
         static_cast<float>(eng->getSampleRate()),
+        static_cast<float>(eng->getOutputLatencyMillis()),
+        static_cast<float>(eng->getInputLatencyMillis()),
     };
-    jfloatArray arr = env->NewFloatArray(5);
-    env->SetFloatArrayRegion(arr, 0, 5, values);
+    jfloatArray arr = env->NewFloatArray(7);
+    env->SetFloatArrayRegion(arr, 0, 7, values);
     return arr;
 }
 
