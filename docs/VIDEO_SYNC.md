@@ -446,6 +446,25 @@ GUID before applying the outer-length parser.
   video = 3 channels, which exceeds an anon cap of 2. NinjamZap's own server
   (`video.ninjamzap.com:2049` and `:2050`) has the anon cap raised to 8 so
   third-party clients can test video against it.
+- **Sender: emit each frame chunk in AVCC framing.** After the outer
+  4-byte BE wrapper, the frame bytes are standard H.264 AVCC: each NAL
+  unit prefixed by its own 4-byte big-endian length giving the bytes of
+  that NAL. Raw NAL bytes (the slice header by itself, no length prefix)
+  and Annex-B start codes (`00 00 00 01`) are both incompatible with the
+  reference receiver, which feeds the chunk payload directly into a
+  decoder configured for 4-byte AVCC length prefixes. Some encoder
+  front-ends strip the per-NAL lengths during packaging — keep them.
+- **Receiver: do not hardcode the audio channel index when matching the
+  video marker's audio GUID.** A sender may place audio on channels 2/3
+  and reserve channel 1 for video to keep concerns separated; the audio
+  channel index is a convention, not a constraint. When validating the
+  video marker's `audio_guid` against a user's audio interval GUIDs,
+  iterate the user's non-video channels (`flags & 0x10 == 0`) rather than
+  inspecting a fixed index. Prefer the channel whose current decode-state
+  GUID matches the marker; fall back to any active audio channel to seed
+  "user is broadcasting", otherwise the video will hold indefinitely
+  waiting for an audio interval that was always there on a different
+  channel.
 
 ---
 

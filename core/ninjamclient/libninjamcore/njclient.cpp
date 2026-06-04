@@ -3073,11 +3073,19 @@ void NJClient::on_new_interval()
       const char *dname = duser->name.Get();
       const char *dAt = strchr(dname, '@');
       int dNameLen = dAt ? (int)(dAt - dname) : (int)strlen(dname);
-      SYNCLOG("SWAP#%d audio: user=%.*s ds=%s nds0=%s nds1=%s",
-        m_sync_interval_cnt, dNameLen, dname,
-        duser->channels[0].ds ? "Y" : "N",
-        duser->channels[0].next_ds[0] ? "Y" : "N",
-        duser->channels[0].next_ds[1] ? "Y" : "N");
+      // Scan all non-video channels — clients can place audio on any index.
+      int firstAudioCh = -1;
+      bool anyDs = false, anyNds0 = false, anyNds1 = false;
+      for (int ci = 0; ci < MAX_USER_CHANNELS; ci++) {
+        RemoteUser_Channel *rc = &duser->channels[ci];
+        if (rc->flags & 0x10) continue;
+        if (rc->ds) { anyDs = true; if (firstAudioCh < 0) firstAudioCh = ci; }
+        if (rc->next_ds[0]) anyNds0 = true;
+        if (rc->next_ds[1]) anyNds1 = true;
+      }
+      SYNCLOG("SWAP#%d audio: user=%.*s ch=%d ds=%s nds0=%s nds1=%s",
+        m_sync_interval_cnt, dNameLen, dname, firstAudioCh,
+        anyDs ? "Y" : "N", anyNds0 ? "Y" : "N", anyNds1 ? "Y" : "N");
     }
   }
 
@@ -3168,17 +3176,32 @@ void NJClient::on_new_interval()
       for (int ui = 0; ui < m_remoteusers.GetSize(); ui++) {
         RemoteUser *ru = m_remoteusers.Get(ui);
         if (!ru || strcmp(ru->name.Get(), vs->next.username)) continue;
-        senderDs = ru->channels[0].ds;
-        if (senderDs) {
+        // Scan ALL channels (not just channel 0): some implementations
+        // (e.g. JamWide) legitimately broadcast audio on non-zero channel
+        // indices to keep the video slot free of audio. Prefer a channel
+        // whose ds->guid matches the marker's audio_guid; fall back to
+        // the first non-video active channel so audioHasData reflects
+        // "user is broadcasting", not "user broadcasts on channel 0".
+        for (int ci = 0; ci < MAX_USER_CHANNELS; ci++) {
+          RemoteUser_Channel *rc = &ru->channels[ci];
+          if (rc->flags & 0x10) continue; // skip video channels
+          DecodeState *ds = rc->ds;
+          if (!ds) continue;
           audioHasData = true;
-          if (hasGuid && !memcmp(senderDs->guid, videoAudioGuid, 16)) {
+          if (!senderDs) senderDs = ds; // first-found fallback
+          if (hasGuid && !memcmp(ds->guid, videoAudioGuid, 16)) {
+            senderDs = ds;
             guidMatch = true;
             matchType = 1;
+            break;
           }
-          if (hasGuid && !guidMatch && !memcmp(vs->prev_ds_guid, videoAudioGuid, 16)) {
-            guidMatch = true;
-            matchType = 2;
-          }
+        }
+        // prev_ds_guid is per-video-state (not per-channel) — check after
+        // the channel scan if no current ds matched.
+        if (audioHasData && hasGuid && !guidMatch &&
+            !memcmp(vs->prev_ds_guid, videoAudioGuid, 16)) {
+          guidMatch = true;
+          matchType = 2;
         }
         break;
       }
