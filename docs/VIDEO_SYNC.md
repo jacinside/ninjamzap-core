@@ -339,6 +339,23 @@ In our code these map to `RawDataSendBegin()` / `RawDataSendWrite()` in
 above. The server (stock NINJAM, or our fork) doesn't need any custom support
 to relay video.
 
+### Detecting whether the server supports video
+
+The auth challenge (`mpb_server_auth_challenge`) carries a `server_caps`
+field. **Bit 1 (`0x02`) signals that the server is configured to relay
+video channels** (`AllowVideoChannels yes` in the cfg of any
+NinjamZap-compatible server fork). Read it during the auth handshake:
+
+```cpp
+bool serverSupportsVideo = (cha.server_caps & 0x02) != 0;
+```
+
+Stock NINJAM servers never set this bit and stock NINJAM clients ignore
+it, so this is fully backward-compatible — it's a probe for "is the
+server willing to relay video channels for me?" A client that supports
+both server-relayed video and an out-of-band fallback (P2P / WebRTC /
+etc.) can use this bit to pick the path at connect time.
+
 ### Advertising a video channel (sender)
 
 Send `SET_CHANNEL_INFO` (0x82) with a record per local channel. Per-channel
@@ -478,4 +495,4 @@ GUID before applying the outer-length parser.
 | Camera capture, H.264 encode/decode, playback pacing | Platform app code — *not in this repo* |
 | End-to-end sync tests (26 Catch2 scenarios, Docker NINJAM server) | `tests/video-sync/` |
 
-*This repository is GPL v3.*
+*This repository is GPL v2, matching upstream Cockos NINJAM.*

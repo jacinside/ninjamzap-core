@@ -15,6 +15,23 @@ minor releases — once it stabilizes the project moves to `1.0.0`):
 - **PATCH** — receiver/sender bug fixes that do not alter the wire format
   or spec.
 
+## [0.2.0] — 2026-06-17
+
+### Changed
+
+- **Relicensed from GPL v3 to GPL v2** to match upstream Cockos NINJAM.
+  The v3 designation was elective — none of the bundled components
+  require it (NJClient is "v2 or later", WDL is Zlib-style permissive,
+  Vorbis is BSD). Staying on v2 keeps the whole NINJAM ecosystem
+  interoperable so downstream consumers can import or submodule this
+  code without relicensing.
+
+### Compatibility
+
+- No wire-format or API change. Binary and source compatible with
+  `v0.1.0` — implementers pinned to `v0.1.0` may bump directly with
+  no integration changes.
+
 ## [0.1.0] — 2026-06-03
 
 First tagged release. Snapshot of the public reference implementation and
