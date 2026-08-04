@@ -15,6 +15,22 @@ minor releases — once it stabilizes the project moves to `1.0.0`):
 - **PATCH** — receiver/sender bug fixes that do not alter the wire format
   or spec.
 
+## [0.2.1] — 2026-08-04
+
+### Fixed
+
+- **Voice-chat (live) video A/V sync.** When a sender's audio channel runs in
+  NINJAM voice-chat mode (`flags & 2`), its audio streams continuously behind a
+  ~0.75 s receiver jitter buffer, so delivering video frames on arrival ran the
+  picture ahead of the sound. Video frames now pass through a matching
+  receiver-side delay line and are released in sync with that audio, without the
+  interval quantization of the accumulate/SWAP path.
+
+### Compatibility
+
+- Receiver-side only. No wire-format or API change — source and binary
+  compatible with `v0.2.0`.
+
 ## [0.2.0] — 2026-06-17
 
 ### Changed
