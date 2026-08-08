@@ -15,6 +15,23 @@ minor releases — once it stabilizes the project moves to `1.0.0`):
 - **PATCH** — receiver/sender bug fixes that do not alter the wire format
   or spec.
 
+## [0.2.2] — 2026-08-08
+
+### Fixed
+
+- **Contiguous local channel indices.** The adapter now maps each caller-facing
+  local channel id to a contiguous NINJAM `channel_idx` (0, 1, 2, …) instead of
+  passing sparse ids straight through. NINJAM identifies local channels by
+  `channel_idx` and rejects any whose index is `>= maxchan` advertised by the
+  server, so a second local channel created with a non-contiguous id would be
+  captured but never transmitted (its meter moved yet no audio was sent). Ids are
+  translated on every per-channel call and the slot is freed on removal; a
+  diagnostic warns when an allocated index would still exceed the server limit.
+
+### Compatibility
+
+- No wire-format change. Behavior fix only.
+
 ## [0.2.1] — 2026-08-04
 
 ### Fixed
