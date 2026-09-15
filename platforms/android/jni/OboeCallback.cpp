@@ -67,6 +67,19 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
     // Must run on the audio thread before any DSP. Denormal protection.
     enableFlushToZeroOnce();
 
+    // Output buffer auto-tuning: grows the queue by one burst when the
+    // stream reports a new xrun (Oboe LatencyTuner). No logging here — this
+    // is the real-time thread; growth events are counted and surfaced via
+    // getTunerGrowCount() for the metrics panel / periodic Kotlin log.
+    if (auto* tuner = m_latencyTuner.load(std::memory_order_acquire)) {
+        tuner->tune();
+        int32_t bufSize = outputStream->getBufferSizeInFrames();
+        if (bufSize != m_lastTunedBufferSize) {
+            if (m_lastTunedBufferSize != 0) m_tunerGrowCount.fetch_add(1, std::memory_order_relaxed);
+            m_lastTunedBufferSize = bufSize;
+        }
+    }
+
     auto* outputBuffer = static_cast<float*>(audioData);
     int32_t framesToProcess = std::min(numFrames, MAX_FRAMES);
 

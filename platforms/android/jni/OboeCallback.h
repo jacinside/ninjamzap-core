@@ -50,6 +50,12 @@ public:
     void getOutputPeaks(float* left, float* right) const;
     void getInputPeaks(float* left, float* right) const;
 
+    // Output-buffer auto-tuner owned by OboeEngine; tune() is called at the
+    // top of every output callback. nullptr = static buffer. See
+    // OboeEngine::m_outputTuner.
+    void setLatencyTuner(oboe::LatencyTuner* tuner) { m_latencyTuner.store(tuner, std::memory_order_release); }
+    int32_t getTunerGrowCount() const { return m_tunerGrowCount.load(std::memory_order_relaxed); }
+
     // Direct monitor — see m_directMonitor field doc.
     void setDirectMonitor(bool enabled) { m_directMonitor.store(enabled, std::memory_order_relaxed); }
     void setLocalGain(float gain) { m_localGain.store(gain, std::memory_order_relaxed); }
@@ -94,6 +100,10 @@ private:
     // independently, so the effective scaling on remote audio is master²
     // (same on iOS — accepted asymmetry).
     std::atomic<float> m_masterGain{1.0f};
+
+    std::atomic<oboe::LatencyTuner*> m_latencyTuner{nullptr};
+    int32_t m_lastTunedBufferSize = 0;   // audio thread only
+    std::atomic<int32_t> m_tunerGrowCount{0};   // times the output buffer grew (xrun-driven)
 
     // Peak tracking (atomic for cross-thread access)
     std::atomic<float> m_outputPeakL{0.0f};

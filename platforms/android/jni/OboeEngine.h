@@ -132,7 +132,17 @@ private:
     // Buffer-size multiplier applied to stream burst after open. Lower =
     // less queue (lower latency, more underrun risk). Default 3× matches
     // Oboe's "safe" default; ultra_low/low presets bring it down to 2×.
+    // On the OUTPUT stream this is now the CEILING of the dynamic tuner
+    // below, not the fixed size. Input still uses it as a fixed size.
     std::atomic<int32_t> m_bufferMultiplier{3};
+
+    // Dynamic output buffer (Oboe auto-tuning pattern, docs/ANDROID_AUDIO_LATENCY.md §6):
+    // the output queue starts at 1× burst and grows by one burst each time
+    // the stream reports a new xrun, capped at burst × m_bufferMultiplier
+    // (the previous fixed value) so output latency is only ever equal to or
+    // lower than the static setting. tune() runs on the audio thread from
+    // NinjamOboeCallback; the pointer is cleared before the stream is stopped.
+    std::unique_ptr<oboe::LatencyTuner> m_outputTuner;
 
     // Helpers
     bool openOutputStream();

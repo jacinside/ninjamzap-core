@@ -316,14 +316,21 @@ bool OboeEngine::openOutputStream() {
     // reduces audible latency on the Oboe path. The actual value AAudio
     // grants may be larger than requested.
     int32_t outBurst = m_outputStream->getFramesPerBurst();
-    int32_t requestedOutBuf = outBurst * m_bufferMultiplier.load();
-    auto outBufRes = m_outputStream->setBufferSizeInFrames(requestedOutBuf);
+    int32_t maxOutBuf = outBurst * m_bufferMultiplier.load();
+    // Dynamic output buffer: start at the lowest size (1× burst) and let the
+    // LatencyTuner grow it one burst per new xrun, never past the profile's
+    // fixed size. See m_outputTuner doc in OboeEngine.h.
+    m_outputTuner = std::make_unique<oboe::LatencyTuner>(*m_outputStream, maxOutBuf);
+    m_outputTuner->setMinimumBufferSize(outBurst);
+    m_outputTuner->setBufferSizeIncrement(outBurst);
+    auto outBufRes = m_outputStream->setBufferSizeInFrames(outBurst);
     int32_t actualOutBuf = outBufRes ? outBufRes.value() : m_outputStream->getBufferSizeInFrames();
-    LOGI("Output stream opened: requested deviceId=%d actual deviceId=%d sharing=%s perfMode=%s burst=%d bufSize req=%d actual=%d",
+    m_callback->setLatencyTuner(m_outputTuner.get());
+    LOGI("Output stream opened: requested deviceId=%d actual deviceId=%d sharing=%s perfMode=%s burst=%d bufSize start=%d actual=%d max=%d (dynamic, grows on xrun)",
          m_outputDeviceId.load(), m_outputStream->getDeviceId(),
          oboe::convertToText(m_outputStream->getSharingMode()),
          oboe::convertToText(m_outputStream->getPerformanceMode()),
-         outBurst, requestedOutBuf, actualOutBuf);
+         outBurst, outBurst, actualOutBuf, maxOutBuf);
     return true;
 }
 
@@ -405,8 +412,12 @@ void OboeEngine::closeStreams() {
         m_inputStream.reset();
     }
     if (m_outputStream) {
+        // Detach the tuner before stopping so the audio thread can't touch it
+        // after it is destroyed (stop/close wait for the callback to return).
+        m_callback->setLatencyTuner(nullptr);
         m_outputStream->requestStop();
         m_outputStream->close();
+        m_outputTuner.reset();
         m_outputStream.reset();
     }
 }
