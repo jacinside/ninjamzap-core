@@ -55,6 +55,8 @@ public:
     // OboeEngine::m_outputTuner.
     void setLatencyTuner(oboe::LatencyTuner* tuner) { m_latencyTuner.store(tuner, std::memory_order_release); }
     int32_t getTunerGrowCount() const { return m_tunerGrowCount.load(std::memory_order_relaxed); }
+    int32_t getInputShortReads() const { return m_inputShortReads.load(std::memory_order_relaxed); }
+    int32_t getCallbackMaxMicros() const { return m_callbackMaxMicros.load(std::memory_order_relaxed); }
 
     // Direct monitor — see m_directMonitor field doc.
     void setDirectMonitor(bool enabled) { m_directMonitor.store(enabled, std::memory_order_relaxed); }
@@ -104,6 +106,12 @@ private:
     std::atomic<oboe::LatencyTuner*> m_latencyTuner{nullptr};
     int32_t m_lastTunedBufferSize = 0;   // audio thread only
     std::atomic<int32_t> m_tunerGrowCount{0};   // times the output buffer grew (xrun-driven)
+    // Stream health (audio thread writes, UI thread reads). Short read = the
+    // input delivered fewer frames than the output asked for (capture
+    // overrun / drift); the tail is zero-filled, so it is an audible glitch
+    // on the mic path that AAudio's xrun counter does not always report.
+    std::atomic<int32_t> m_inputShortReads{0};
+    std::atomic<int32_t> m_callbackMaxMicros{0};
 
     // Peak tracking (atomic for cross-thread access)
     std::atomic<float> m_outputPeakL{0.0f};

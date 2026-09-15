@@ -76,6 +76,23 @@ public:
     // Returns 0 (kSessionIdNone) if the input stream isn't open.
     int32_t getInputSessionId() const;
 
+    // AEC toggle from the connection screen. Changing it while running
+    // reopens the streams (the input needs / drops its session ID).
+    void setAecRequested(bool enabled);
+
+    // Output route is Bluetooth. Store-only: callers follow up with
+    // setOutputDeviceId(), which performs the reopen that applies it.
+    void setOutputBluetooth(bool bluetooth) { m_outputBluetooth.store(bluetooth); }
+
+    // Stream health counters for the metrics panel / periodic stats log.
+    // Read from a non-RT thread; the stream getters are cheap local reads.
+    int32_t getOutputXRuns() const;
+    int32_t getInputXRuns() const;
+    int32_t getInputShortReads() const;
+    int32_t getCallbackMaxMicros() const;
+    int32_t getTunerGrowCount() const;
+    int getLatencyProfile() const { return m_latencyProfile.load(); }
+
     // Forwarders to the callback's atomic flags / gains.
     void setDirectMonitor(bool enabled);
     void setLocalGain(float gain);
@@ -129,18 +146,34 @@ private:
     // switched to Unprocessed when camera starts to disable HAL AGC/AEC/NS.
     std::atomic<oboe::InputPreset> m_inputPreset{oboe::InputPreset::VoicePerformance};
 
-    // Buffer-size multiplier applied to stream burst after open. Lower =
-    // less queue (lower latency, more underrun risk). Default 3× matches
-    // Oboe's "safe" default; ultra_low/low presets bring it down to 2×.
-    // On the OUTPUT stream this is now the CEILING of the dynamic tuner
-    // below, not the fixed size. Input still uses it as a fixed size.
-    std::atomic<int32_t> m_bufferMultiplier{3};
+    // Latency profile (connection-screen preset): 0=ultra_low, 1=low, 2=safe.
+    // Single source of truth for buffer sizing — see profileParams(). Every
+    // profile uses PerformanceMode::LowLatency: `None` is a different (slow,
+    // ~200 ms round-trip) HAL path, not "a bit more buffer"
+    // (docs/ANDROID_AUDIO_ENGINE_AUDIT.md §2.1).
+    std::atomic<int> m_latencyProfile{1};
+    struct ProfileParams {
+        int32_t outMinBursts;   // LatencyTuner start / minimum (output)
+        int32_t outMaxBursts;   // LatencyTuner ceiling (output); 0 = stream capacity
+        int32_t inBursts;       // fixed input buffer (bursts)
+    };
+    static ProfileParams profileParams(int profile);
+    static int profileFromFramesPerBuffer(int32_t framesPerBuffer);
+
+    // AEC requested from the connection screen. Only then do we ask AAudio
+    // for a session ID on the input: a session ID disables MMAP capture on
+    // every device (effects can't attach to MMAP streams), so requesting it
+    // unconditionally silently pushed the mic to the legacy path.
+    std::atomic<bool> m_aecRequested{false};
+
+    // Output currently routed to Bluetooth (set by Kotlin from AudioManager).
+    // BT sinks need ~2× the queue (iOS parity: larger buffer on BT routes).
+    std::atomic<bool> m_outputBluetooth{false};
 
     // Dynamic output buffer (Oboe auto-tuning pattern, docs/ANDROID_AUDIO_LATENCY.md §6):
-    // the output queue starts at 1× burst and grows by one burst each time
-    // the stream reports a new xrun, capped at burst × m_bufferMultiplier
-    // (the previous fixed value) so output latency is only ever equal to or
-    // lower than the static setting. tune() runs on the audio thread from
+    // the output queue starts at profile.outMinBursts × burst and grows by
+    // one burst each time the stream reports a new xrun, capped at
+    // profile.outMaxBursts × burst. tune() runs on the audio thread from
     // NinjamOboeCallback; the pointer is cleared before the stream is stopped.
     std::unique_ptr<oboe::LatencyTuner> m_outputTuner;
 

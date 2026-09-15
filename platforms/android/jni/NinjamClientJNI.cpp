@@ -967,7 +967,8 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamMetrics(
     if (!eng || !eng->isRunning()) {
         return env->NewFloatArray(0);
     }
-    float values[7] = {
+    // [0..6] legacy layout; [7..12] stream health (see NativeAudioModule.getPerformanceMetrics).
+    float values[13] = {
         static_cast<float>(eng->getOutputBurst()),
         static_cast<float>(eng->getOutputBufferSize()),
         static_cast<float>(eng->getInputBurst()),
@@ -975,9 +976,15 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamMetrics(
         static_cast<float>(eng->getSampleRate()),
         static_cast<float>(eng->getOutputLatencyMillis()),
         static_cast<float>(eng->getInputLatencyMillis()),
+        static_cast<float>(eng->getOutputXRuns()),
+        static_cast<float>(eng->getInputXRuns()),
+        static_cast<float>(eng->getInputShortReads()),
+        static_cast<float>(eng->getCallbackMaxMicros()),
+        static_cast<float>(eng->getTunerGrowCount()),
+        static_cast<float>(eng->getLatencyProfile()),
     };
-    jfloatArray arr = env->NewFloatArray(7);
-    env->SetFloatArrayRegion(arr, 0, 7, values);
+    jfloatArray arr = env->NewFloatArray(13);
+    env->SetFloatArrayRegion(arr, 0, 13, values);
     return arr;
 }
 
@@ -1001,6 +1008,26 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetInputPreset(
     auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
     if (!eng) return;
     eng->setInputPreset(static_cast<oboe::InputPreset>(preset));
+}
+
+// AEC toggle → the input only allocates a session ID when AEC is on
+// (a session ID disables MMAP capture). Reopens the streams when running.
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetAecRequested(
+    JNIEnv* env, jobject thiz, jlong enginePtr, jboolean enabled) {
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return;
+    eng->setAecRequested(enabled == JNI_TRUE);
+}
+
+// Output route is Bluetooth → 2× output queue (store-only; the following
+// nativeSetOutputDeviceId reopen applies it).
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetOutputBluetooth(
+    JNIEnv* env, jobject thiz, jlong enginePtr, jboolean bluetooth) {
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return;
+    eng->setOutputBluetooth(bluetooth == JNI_TRUE);
 }
 
 // Apply a connection-screen latency profile (0=ultra_low, 1=low, 2=safe).

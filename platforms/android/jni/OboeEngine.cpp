@@ -1,4 +1,5 @@
 #include "OboeEngine.h"
+#include <string>
 #include <android/log.h>
 
 #define LOG_TAG "OboeEngine"
@@ -39,21 +40,16 @@ bool OboeEngine::start(int32_t sampleRate, int32_t framesPerBuffer) {
     // FeaturesFlags.inputBufferSize). JS calls setFeatureFlag BEFORE the
     // engine exists, so the JS→Kotlin pathway can't push setLatencyProfile
     // in time — apply the same mapping here at engine start so the first
-    // openOutput/openInput pair already gets the right buffer multiplier
-    // and performance mode.
-    if (framesPerBuffer <= 128) {
-        m_bufferMultiplier.store(2);
-        m_performanceMode = oboe::PerformanceMode::LowLatency;
-    } else if (framesPerBuffer <= 256) {
-        m_bufferMultiplier.store(2);
-        m_performanceMode = oboe::PerformanceMode::LowLatency;
-    } else {
-        m_bufferMultiplier.store(3);
-        m_performanceMode = oboe::PerformanceMode::None;
+    // openOutput/openInput pair already gets the right buffers.
+    m_latencyProfile.store(profileFromFramesPerBuffer(framesPerBuffer));
+    m_performanceMode = oboe::PerformanceMode::LowLatency;
+    {
+        ProfileParams p = profileParams(m_latencyProfile.load());
+        LOGI("Starting audio engine: %dHz, %d frames/buffer (profile=%d out=%dx..%s in=%dx aec=%d bt=%d)",
+             sampleRate, framesPerBuffer, m_latencyProfile.load(),
+             p.outMinBursts, p.outMaxBursts ? std::to_string(p.outMaxBursts).append("x").c_str() : "capacity",
+             p.inBursts, m_aecRequested.load() ? 1 : 0, m_outputBluetooth.load() ? 1 : 0);
     }
-    LOGI("Starting audio engine: %dHz, %d frames/buffer (latency profile: multiplier=%d perfMode=%s)",
-         sampleRate, framesPerBuffer,
-         m_bufferMultiplier.load(), oboe::convertToText(m_performanceMode));
 
     // Open output first (it drives the callback)
     if (!openOutputStream()) {
@@ -229,25 +225,74 @@ void OboeEngine::setInputPreset(oboe::InputPreset preset) {
     }
 }
 
-void OboeEngine::setLatencyProfile(int profile) {
-    int32_t multiplier;
-    oboe::PerformanceMode mode;
+// Preset → buffer sizing (docs/ANDROID_AUDIO_ENGINE_AUDIT.md §4.1). All
+// profiles run PerformanceMode::LowLatency; the presets differ only in how
+// much queue the output tuner starts with / may grow to, and in the fixed
+// input buffer.
+//   ultra_low: out 1× → 2×,  in 1×   (HAL may floor the input higher)
+//   low:       out 2× → 3×,  in 2×   (2× = Oboe's own default start)
+//   safe:      out 2× → capacity, in 3×
+OboeEngine::ProfileParams OboeEngine::profileParams(int profile) {
     switch (profile) {
-        case 0: multiplier = 2; mode = oboe::PerformanceMode::LowLatency; break;  // ultra_low
-        case 1: multiplier = 2; mode = oboe::PerformanceMode::LowLatency; break;  // low
+        case 0:  return {1, 2, 1};
+        case 1:  return {2, 3, 2};
         case 2:
-        default: multiplier = 3; mode = oboe::PerformanceMode::None;       break; // safe
+        default: return {2, 0, 3};
     }
-    int32_t prevMult = m_bufferMultiplier.exchange(multiplier);
-    oboe::PerformanceMode prevMode = m_performanceMode;
-    m_performanceMode = mode;
-    if (prevMult == multiplier && prevMode == mode) return;
-    LOGI("Latency profile: %d (multiplier=%d perfMode=%s) — reopening",
-         profile, multiplier, oboe::convertToText(mode));
+}
+
+int OboeEngine::profileFromFramesPerBuffer(int32_t framesPerBuffer) {
+    if (framesPerBuffer <= 128) return 0;
+    if (framesPerBuffer <= 256) return 1;
+    return 2;
+}
+
+void OboeEngine::setLatencyProfile(int profile) {
+    if (profile < 0 || profile > 2) profile = 2;
+    int prev = m_latencyProfile.exchange(profile);
+    if (prev == profile) return;
+    ProfileParams p = profileParams(profile);
+    LOGI("Latency profile: %d -> %d (out=%dx..%dx in=%dx, LowLatency) — reopening",
+         prev, profile, p.outMinBursts, p.outMaxBursts, p.inBursts);
     std::lock_guard<std::mutex> lock(m_streamMutex);
     if (m_running.load()) {
         reopenStreamsLocked();
     }
+}
+
+void OboeEngine::setAecRequested(bool enabled) {
+    bool prev = m_aecRequested.exchange(enabled);
+    if (prev == enabled) return;
+    LOGI("AEC requested: %d -> %d (input session ID %s) — reopening",
+         prev ? 1 : 0, enabled ? 1 : 0, enabled ? "allocated" : "dropped, MMAP capture possible");
+    std::lock_guard<std::mutex> lock(m_streamMutex);
+    if (m_running.load()) {
+        reopenStreamsLocked();
+    }
+}
+
+int32_t OboeEngine::getOutputXRuns() const {
+    if (!m_outputStream) return 0;
+    auto r = m_outputStream->getXRunCount();
+    return r ? r.value() : 0;
+}
+
+int32_t OboeEngine::getInputXRuns() const {
+    if (!m_inputStream) return 0;
+    auto r = m_inputStream->getXRunCount();
+    return r ? r.value() : 0;
+}
+
+int32_t OboeEngine::getInputShortReads() const {
+    return m_callback ? m_callback->getInputShortReads() : 0;
+}
+
+int32_t OboeEngine::getCallbackMaxMicros() const {
+    return m_callback ? m_callback->getCallbackMaxMicros() : 0;
+}
+
+int32_t OboeEngine::getTunerGrowCount() const {
+    return m_callback ? m_callback->getTunerGrowCount() : 0;
 }
 
 // ============================================================================
@@ -316,21 +361,31 @@ bool OboeEngine::openOutputStream() {
     // reduces audible latency on the Oboe path. The actual value AAudio
     // grants may be larger than requested.
     int32_t outBurst = m_outputStream->getFramesPerBurst();
-    int32_t maxOutBuf = outBurst * m_bufferMultiplier.load();
-    // Dynamic output buffer: start at the lowest size (1× burst) and let the
+    int32_t capacity = m_outputStream->getBufferCapacityInFrames();
+    ProfileParams p = profileParams(m_latencyProfile.load());
+    int32_t btScale = m_outputBluetooth.load() ? 2 : 1;
+    int32_t minOutBuf = outBurst * p.outMinBursts * btScale;
+    int32_t maxOutBuf = p.outMaxBursts ? outBurst * p.outMaxBursts * btScale : capacity;
+    if (capacity > 0) {
+        if (maxOutBuf > capacity) maxOutBuf = capacity;
+        if (minOutBuf > maxOutBuf) minOutBuf = maxOutBuf;
+    }
+    // Dynamic output buffer: start at the profile's minimum and let the
     // LatencyTuner grow it one burst per new xrun, never past the profile's
-    // fixed size. See m_outputTuner doc in OboeEngine.h.
+    // ceiling. See m_outputTuner doc in OboeEngine.h.
     m_outputTuner = std::make_unique<oboe::LatencyTuner>(*m_outputStream, maxOutBuf);
-    m_outputTuner->setMinimumBufferSize(outBurst);
+    m_outputTuner->setMinimumBufferSize(minOutBuf);
     m_outputTuner->setBufferSizeIncrement(outBurst);
-    auto outBufRes = m_outputStream->setBufferSizeInFrames(outBurst);
+    auto outBufRes = m_outputStream->setBufferSizeInFrames(minOutBuf);
     int32_t actualOutBuf = outBufRes ? outBufRes.value() : m_outputStream->getBufferSizeInFrames();
     m_callback->setLatencyTuner(m_outputTuner.get());
-    LOGI("Output stream opened: requested deviceId=%d actual deviceId=%d sharing=%s perfMode=%s burst=%d bufSize start=%d actual=%d max=%d (dynamic, grows on xrun)",
+    LOGI("Output stream opened: requested deviceId=%d actual deviceId=%d api=%s mmap=%d sharing=%s perfMode=%s burst=%d bufSize start=%d actual=%d max=%d capacity=%d profile=%d bt=%d (dynamic, grows on xrun)",
          m_outputDeviceId.load(), m_outputStream->getDeviceId(),
+         oboe::convertToText(m_outputStream->getAudioApi()),
+         oboe::OboeExtensions::isMMapUsed(m_outputStream.get()) ? 1 : 0,
          oboe::convertToText(m_outputStream->getSharingMode()),
          oboe::convertToText(m_outputStream->getPerformanceMode()),
-         outBurst, outBurst, actualOutBuf, maxOutBuf);
+         outBurst, minOutBuf, actualOutBuf, maxOutBuf, capacity, m_latencyProfile.load(), btScale == 2 ? 1 : 0);
     return true;
 }
 
@@ -349,13 +404,14 @@ bool OboeEngine::openInputStream() {
            ->setChannelCount(oboe::ChannelCount::Stereo)
            ->setSampleRate(m_sampleRate)                  // Match output sample rate
            ->setDeviceId(m_inputDeviceId.load())
-           // Allocate an Android audio session ID so Kotlin can attach
-           // AcousticEchoCanceler / NoiseSuppressor / AutomaticGainControl
-           // to this stream (the AEC toggle in the connection screen).
-           // Without Allocate, getSessionId() returns kSessionIdNone (0) and
-           // AcousticEchoCanceler.create() rejects it.
-           ->setSessionId(oboe::SessionId::Allocate)
            ->setInputPreset(m_inputPreset.load());  // VoicePerformance default; Unprocessed during video
+    // Only allocate an Android audio session ID when the user enabled AEC:
+    // Kotlin needs it to attach AcousticEchoCanceler / NoiseSuppressor /
+    // AutomaticGainControl, but a session ID makes AAudio refuse MMAP for
+    // the capture stream (effects can't attach to MMAP), i.e. it silently
+    // forces the legacy/Shared path. Without AEC, keep MMAP possible.
+    const bool aec = m_aecRequested.load();
+    if (aec) builder.setSessionId(oboe::SessionId::Allocate);
 
     oboe::Result result = builder.openStream(m_inputStream);
 
@@ -392,16 +448,22 @@ bool OboeEngine::openInputStream() {
     // may floor it higher (the Moto E40 legacy path enforces 3× ≈ 120 ms no
     // matter what we ask — confirmed by experiment; 1× was also floored). On
     // MMAP/low-latency-capable devices a small buffer keeps capture tight.
+    // Input buffer is fixed per profile (ultra_low 1×, low 2×, safe 3×);
+    // AEC needs headroom for the effect chain, so it never goes below 3×.
     int32_t inBurst = m_inputStream->getFramesPerBurst();
-    int32_t requestedInBuf = inBurst * 2;
+    int32_t inBursts = profileParams(m_latencyProfile.load()).inBursts;
+    if (aec && inBursts < 3) inBursts = 3;
+    int32_t requestedInBuf = inBurst * inBursts;
     auto inBufRes = m_inputStream->setBufferSizeInFrames(requestedInBuf);
     int32_t actualInBuf = inBufRes ? inBufRes.value() : m_inputStream->getBufferSizeInFrames();
-    LOGI("Input stream opened: deviceId=%d sharing=%s api=%s perfMode=%s burst=%d bufSize req=%d actual=%d",
+    LOGI("Input stream opened: deviceId=%d api=%s mmap=%d sharing=%s perfMode=%s sessionId=%d burst=%d bufSize req=%d actual=%d profile=%d",
          m_inputStream->getDeviceId(),
-         oboe::convertToText(m_inputStream->getSharingMode()),
          oboe::convertToText(m_inputStream->getAudioApi()),
+         oboe::OboeExtensions::isMMapUsed(m_inputStream.get()) ? 1 : 0,
+         oboe::convertToText(m_inputStream->getSharingMode()),
          oboe::convertToText(m_inputStream->getPerformanceMode()),
-         inBurst, requestedInBuf, actualInBuf);
+         static_cast<int>(m_inputStream->getSessionId()),
+         inBurst, requestedInBuf, actualInBuf, m_latencyProfile.load());
     return true;
 }
 

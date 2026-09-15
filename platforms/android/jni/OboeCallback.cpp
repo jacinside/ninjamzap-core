@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <chrono>
 #if defined(__x86_64__) || defined(__i386__)
 #include <pmmintrin.h>
 #include <xmmintrin.h>
@@ -66,6 +67,7 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
 
     // Must run on the audio thread before any DSP. Denormal protection.
     enableFlushToZeroOnce();
+    const auto cbStart = std::chrono::steady_clock::now();
 
     // Output buffer auto-tuning: grows the queue by one burst when the
     // stream reports a new xrun (Oboe LatencyTuner). No logging here — this
@@ -109,6 +111,10 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
                 deinterleave(interleavedInput, m_inLeft, m_inRight, readCount);
             }
         }
+    }
+
+    if (m_inputStream && readCount < framesToProcess) {
+        m_inputShortReads.fetch_add(1, std::memory_order_relaxed);
     }
 
     // Apply FX to local input before NINJAM processing (mic boost → compressor → reverb)
@@ -231,6 +237,13 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
         }
     }
 
+    {
+        const auto us = static_cast<int32_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - cbStart).count());
+        if (us > m_callbackMaxMicros.load(std::memory_order_relaxed)) {
+            m_callbackMaxMicros.store(us, std::memory_order_relaxed);
+        }
+    }
     return oboe::DataCallbackResult::Continue;
 }
 
