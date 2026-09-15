@@ -9,6 +9,7 @@
 #include <string>
 #include <functional>
 #include <vector>
+#include <map>
 #include <cmath>
 #include <mutex>
 #endif
@@ -233,6 +234,24 @@ private:
     
   // Private helper methods
     void setupInitialState();
+
+    // JS channel id -> contiguous NJClient channel_idx mapping.
+    //
+    // NJClient identifies local channels by channel_idx and REQUIRES them to be
+    // contiguous 0..maxLocalCh-1 (see njclient.cpp: it normalizes channel_idx to
+    // array order on connect, and process_samples skips any channel whose
+    // channel_idx >= m_max_localch, which the server dictates via its auth reply).
+    // The JS layer allocates non-contiguous channel ids (0, 4, ...), and passing
+    // those straight through as channel_idx means a 2nd local channel added
+    // mid-session lands on channel_idx=4 — rejected by servers with a low maxchan
+    // (e.g. ninjammer): VU moves (source captured pre-NJClient) but no audio is
+    // transmitted/heard. This map decouples the stable JS id from the contiguous
+    // NJClient slot: SetLocalChannelInfo allocates the lowest free slot for a new
+    // id; all other per-channel calls translate through it; remove frees the slot.
+    std::map<int, int> localIdToNjIdx;
+    // Resolve (or allocate, when createIfMissing) the NJClient channel_idx for a
+    // JS channel id. Returns -1 if unknown and not creating.
+    int njLocalIdx(int jsChannelId, bool createIfMissing);
     
     // Member variables
     AbNinjam::Common::NinjamClient* client;
@@ -254,7 +273,7 @@ private:
     // so the legacy paths are untouched. Allocated once in setAudioConfig().
     float** inputBufferN;
     int     inputBufferNCount;
-
+    
     // Metronome settings
     bool metronomeEnabled;
     float metronomeVolume;

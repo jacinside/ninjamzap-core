@@ -107,7 +107,7 @@ const char* NinjamClient_getServerStatus(NinjamClientRef* client) {
     auto adapter = getAdapter(client);
     if (adapter) {
         // Note: This returns a pointer to a temporary - implementation should handle memory properly
-        static std::string status;
+        static thread_local std::string status;
         status = adapter->getServerStatus();
         return status.c_str();
     }
@@ -126,6 +126,13 @@ void NinjamClient_processAudio(NinjamClientRef* client, float* inBufferLeft, flo
     auto adapter = getAdapter(client);
     if (adapter) {
         adapter->processAudio(inBufferLeft, inBufferRight, outBufferLeft, outBufferRight, numFrames);
+    }
+}
+
+void NinjamClient_processAudio3(NinjamClientRef* client, float* inBufferLeft, float* inBufferRight, float* outBufferLeft, float* outBufferRight, float* outBufferMetro, int32_t numFrames) {
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        adapter->processAudio3(inBufferLeft, inBufferRight, outBufferLeft, outBufferRight, outBufferMetro, numFrames);
     }
 }
 
@@ -181,6 +188,13 @@ void NinjamClient_setMetronome(NinjamClientRef* client, float volume, int32_t mu
     }
 }
 
+void NinjamClient_setMetronomeChannel(NinjamClientRef* client, int32_t chidx) {
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        adapter->setMetronomeChannel(chidx);
+    }
+}
+
 // Session info
 int32_t NinjamClient_getBPM(NinjamClientRef* client) {
     auto adapter = getAdapter(client);
@@ -205,15 +219,9 @@ double NinjamClient_getIntervalPosition(NinjamClientRef* client) {
 const char* NinjamClient_getErrorString(NinjamClientRef* client) {
     auto adapter = getAdapter(client);
     if (!adapter) return "";
-    static std::string errorStr;
+    static thread_local std::string errorStr;
     errorStr = adapter->getErrorString();
     return errorStr.c_str();
-}
-
-const char* NinjamClient_getLocalUserName(NinjamClientRef* client) {
-    auto adapter = getAdapter(client);
-    if (!adapter) return "";
-    return adapter->getLocalUserName();
 }
 
 // Callback setup
@@ -316,6 +324,13 @@ void NinjamClient_setLocalChannelInfo(NinjamClientRef* client, int32_t channelIn
                                      setflags == 1 ? true: false,
                                      flags
                                      );
+    }
+}
+
+void NinjamClient_setLocalChannelBitrate(NinjamClientRef* client, int32_t channelIndex, int32_t bitrate) {
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        adapter->setLocalChannelBitrate(channelIndex, bitrate);
     }
 }
 
@@ -484,7 +499,7 @@ int NinjamClient_getUserChannelCount(NinjamClientRef* client, const char* userna
     if (!adapter || !username) {
         return 0;
     }
-    
+
     // Usar caché de usuarios remotos
     std::vector<AbNinjam::Common::RemoteUser> users = adapter->getCachedRemoteUsers();
     for (const auto& user : users) {
@@ -536,6 +551,21 @@ void NinjamClient_setLocalChannelVolume(NinjamClientRef* client, int channelInde
     if (adapter) {
         adapter->setLocalChannelVolume(channelIndex, volume);
     }
+}
+const char* NinjamClient_getLocalUserName(NinjamClientRef* client) {
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        return adapter->getLocalUserName();
+    }
+    return "";
+}
+
+bool NinjamClient_isServerVideoSupported(NinjamClientRef* client) {
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        return adapter->isServerVideoSupported();
+    }
+    return false;
 }
 
 const char* NinjamClient_getUserName(NinjamClientRef* client, int32_t index) {
@@ -615,6 +645,23 @@ int32_t NinjamClient_getUserChannelState(NinjamClientRef* client, const char* us
        }
     }
     return 1; // User or channel not found
+}
+
+int32_t NinjamClient_getUserChannelFlags(NinjamClientRef* client, const char* username, int32_t channelIndex) {
+    auto adapter = getAdapter(client);
+    if (!adapter || !username) return 0;
+
+    std::vector<AbNinjam::Common::RemoteUser> users = adapter->getCachedRemoteUsers();
+    for (const auto& user : users) {
+        if (user.name == username) {
+            for (const auto& channel : user.channels) {
+                if (channel.id == channelIndex) {
+                    return static_cast<int32_t>(channel.flags);
+                }
+            }
+        }
+    }
+    return 0;
 }
 
 int32_t NinjamClient_setUserChannelState(
@@ -766,6 +813,18 @@ void NinjamClient_setRawDataCallback(NinjamClientRef* client, RawDataRecvCallbac
     }
 }
 
+static IntervalSwapCallback g_intervalSwapCallback = nullptr;
+
+void NinjamClient_setIntervalSwapCallback(NinjamClientRef* client, IntervalSwapCallback callback) {
+    g_intervalSwapCallback = callback;
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        adapter->setIntervalSwapCallback([]() {
+            if (g_intervalSwapCallback) g_intervalSwapCallback();
+        });
+    }
+}
+
 void NinjamClient_rawDataSendBegin(NinjamClientRef* client, uint8_t outGuid[16], uint32_t fourcc, int32_t chidx, int32_t estsize) {
     auto adapter = getAdapter(client);
     if (adapter) {
@@ -777,18 +836,6 @@ void NinjamClient_rawDataSendWrite(NinjamClientRef* client, const uint8_t guid[1
     auto adapter = getAdapter(client);
     if (adapter) {
         adapter->rawDataSendWrite(guid, data, static_cast<int>(dataLen), isEnd != 0);
-    }
-}
-
-static IntervalSwapCallback g_intervalSwapCallback = nullptr;
-
-void NinjamClient_setIntervalSwapCallback(NinjamClientRef* client, IntervalSwapCallback callback) {
-    g_intervalSwapCallback = callback;
-    auto adapter = getAdapter(client);
-    if (adapter) {
-        adapter->setIntervalSwapCallback([]() {
-            if (g_intervalSwapCallback) g_intervalSwapCallback();
-        });
     }
 }
 
@@ -834,5 +881,12 @@ void NinjamClient_setVideoSPSPPS(NinjamClientRef* client, const void* data, int3
     auto adapter = getAdapter(client);
     if (adapter) {
         adapter->setVideoSPSPPS(data, static_cast<int>(len));
+    }
+}
+
+void NinjamClient_resetVideoSync(NinjamClientRef* client) {
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        adapter->resetVideoSync();
     }
 }

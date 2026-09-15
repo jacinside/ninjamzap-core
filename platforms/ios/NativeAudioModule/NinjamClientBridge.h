@@ -50,12 +50,19 @@ int32_t NinjamClient_getServerUptime(NinjamClientRef* client);
 void NinjamClient_setAudioConfig(NinjamClientRef* client, int32_t sampleRate, int32_t channels);
 //void NinjamClient_processAudio(NinjamClientRef* client, float* inBuffer, float* outBuffer, int32_t numFrames);
 void NinjamClient_processAudio(NinjamClientRef* client, float* inBufferLeft, float* inBufferRight, float* outBufferLeft, float* outBufferRight, int32_t numFrames);
+// Like processAudio() but renders the metronome into a 3rd mono output buffer.
+// Used when the host wants to omit the metronome from a recording (mix
+// outBufferMetro into the speaker bus, NOT into the recording tap). Requires a
+// prior call to NinjamClient_setMetronomeChannel(2 | 1024) so NJClient routes
+// the metronome to outbuf[2] in mono mode.
+void NinjamClient_processAudio3(NinjamClientRef* client, float* inBufferLeft, float* inBufferRight, float* outBufferLeft, float* outBufferRight, float* outBufferMetro, int32_t numFrames);
 
-// Takes N deinterleaved hardware input channels (inChannels[0..innch-1])
-// instead of a fixed stereo pair. Each local channel picks which of those
-// inputs it encodes via the srcch set through NinjamClient_setLocalChannelInfo,
-// enabling multiple local channels sourced from different physical inputs of
-// a multi-channel interface. Output stays stereo music + mono metronome.
+// Like processAudio3() but takes N deinterleaved hardware input channels
+// (inChannels[0..innch-1]) instead of a fixed stereo pair. Each local channel
+// picks which of those inputs it encodes via the srcch set through
+// NinjamClient_setLocalChannelInfo(), enabling multiple local channels sourced
+// from different physical inputs of a multi-channel interface. Output stays
+// stereo music + mono metronome. Requires NinjamClient_setMetronomeChannel(2 | 1024).
 void NinjamClient_processAudioN(NinjamClientRef* client, float** inChannels, int32_t innch, float* outBufferLeft, float* outBufferRight, float* outBufferMetro, int32_t numFrames);
 
 // Streamlined audio processing function for zero-copy operations
@@ -69,12 +76,21 @@ void NinjamClient_getOutputPeaks(NinjamClientRef* client, float* left, float* ri
 
 // Metronome control
 void NinjamClient_playMetronomeTick(NinjamClientRef* client, int32_t isDownbeat);
+// Routes the metronome to a specific output channel pair. `chidx & 0xff` is the
+// output channel index; OR-in 1024 (`chidx | 1024`) for mono mode (single
+// channel, no stereo pair). Default at NJClient init is 0 — i.e. mixed into the
+// main stereo output bus, which is what stock NINJAM clients do. For our use
+// case (metronome-free recording), call with `2 | 1024` and use
+// NinjamClient_processAudio3() to receive the metronome on its own buffer.
+void NinjamClient_setMetronomeChannel(NinjamClientRef* client, int32_t chidx);
 
 // Channel management
 void NinjamClient_removeLocalChannel(NinjamClientRef* client, int32_t channelIndex);
 void NinjamClient_setLocalChannelState(NinjamClientRef* client, int32_t index, float volume, float pan, int32_t mute, int32_t solo);
 const char* NinjamClient_getLocalChannelName(NinjamClientRef* client, int32_t channelIndex);
 void NinjamClient_setLocalChannelInfo(NinjamClientRef* client, int32_t channelIndex, const char* name, int32_t setsrcch, int32_t srcch, int32_t setxmit, int32_t xmit, int32_t setflags, int32_t flags);
+// Vorbis encoder bitrate for the local channel. Notifies server on change.
+void NinjamClient_setLocalChannelBitrate(NinjamClientRef* client, int32_t channelIndex, int32_t bitrate);
 void NinjamClient_getLocalChannelPeaks(NinjamClientRef* client, int32_t channelIndex, float* left, float* right);
 void NinjamClient_syncWithServerClock(NinjamClientRef* client);
 
@@ -101,6 +117,9 @@ void NinjamClient_sendAdminMessage(NinjamClientRef* client, const char* message)
 
 // User info
 const char* NinjamClient_getLocalUserName(NinjamClientRef* client);
+
+// Server capabilities
+bool NinjamClient_isServerVideoSupported(NinjamClientRef* client);
 const char* NinjamClient_getUserName(NinjamClientRef* client, int32_t index);
 const char* NinjamClient_getUserChannelName(NinjamClientRef* client, const char* username, int32_t channelIndex);
 
@@ -115,6 +134,7 @@ int NinjamClient_getUserChannelCount(NinjamClientRef* client, const char* userna
 // ordinal -> real index instead of assuming 0..count-1 are all present.
 // Returns -1 if the user or ordinal is out of range.
 int NinjamClient_getUserChannelIdAt(NinjamClientRef* client, const char* username, int32_t ordinal);
+int32_t NinjamClient_getUserChannelFlags(NinjamClientRef* client, const char* username, int32_t channelIndex);
 void NinjamClient_setRemoteChannelVolume(NinjamClientRef* client, const char* username, int channelIndex, float volume);
 void NinjamClient_setLocalChannelVolume(NinjamClientRef* client, int channelIndex, float volume);
 
@@ -124,7 +144,6 @@ int32_t NinjamClient_getBPM(NinjamClientRef* client);
 int32_t NinjamClient_getBPI(NinjamClientRef* client);
 double NinjamClient_getIntervalPosition(NinjamClientRef* client);
 const char* NinjamClient_getErrorString(NinjamClientRef* client);
-const char* NinjamClient_getLocalUserName(NinjamClientRef* client);
 
 // Callbacks
 typedef void (*MessageCallback)(uint16_t type, const uint8_t* data, int32_t size);
@@ -161,6 +180,7 @@ void NinjamClient_setVideoChannel(NinjamClientRef* client, int32_t chidx, uint32
 void NinjamClient_stopVideoChannel(NinjamClientRef* client);
 void NinjamClient_queueVideoFrame(NinjamClientRef* client, const void* data, int32_t len);
 void NinjamClient_setVideoSPSPPS(NinjamClientRef* client, const void* data, int32_t len);
+void NinjamClient_resetVideoSync(NinjamClientRef* client);
 
 // Video frame ready callback — called from AudioProc() to deliver individual frames
 // at audio clock rate. frameIndex 0 = SPS/PPS, 1..N = H.264 frames.

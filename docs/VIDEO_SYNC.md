@@ -339,6 +339,23 @@ In our code these map to `RawDataSendBegin()` / `RawDataSendWrite()` in
 above. The server (stock NINJAM, or our fork) doesn't need any custom support
 to relay video.
 
+### Detecting whether the server supports video
+
+The auth challenge (`mpb_server_auth_challenge`) carries a `server_caps`
+field. **Bit 1 (`0x02`) signals that the server is configured to relay
+video channels** (`AllowVideoChannels yes` in the cfg of any
+NinjamZap-compatible server fork). Read it during the auth handshake:
+
+```cpp
+bool serverSupportsVideo = (cha.server_caps & 0x02) != 0;
+```
+
+Stock NINJAM servers never set this bit and stock NINJAM clients ignore
+it, so this is fully backward-compatible — it's a probe for "is the
+server willing to relay video channels for me?" A client that supports
+both server-relayed video and an out-of-band fallback (P2P / WebRTC /
+etc.) can use this bit to pick the path at connect time.
+
 ### Advertising a video channel (sender)
 
 Send `SET_CHANNEL_INFO` (0x82) with a record per local channel. Per-channel
@@ -446,6 +463,25 @@ GUID before applying the outer-length parser.
   video = 3 channels, which exceeds an anon cap of 2. NinjamZap's own server
   (`video.ninjamzap.com:2049` and `:2050`) has the anon cap raised to 8 so
   third-party clients can test video against it.
+- **Sender: emit each frame chunk in AVCC framing.** After the outer
+  4-byte BE wrapper, the frame bytes are standard H.264 AVCC: each NAL
+  unit prefixed by its own 4-byte big-endian length giving the bytes of
+  that NAL. Raw NAL bytes (the slice header by itself, no length prefix)
+  and Annex-B start codes (`00 00 00 01`) are both incompatible with the
+  reference receiver, which feeds the chunk payload directly into a
+  decoder configured for 4-byte AVCC length prefixes. Some encoder
+  front-ends strip the per-NAL lengths during packaging — keep them.
+- **Receiver: do not hardcode the audio channel index when matching the
+  video marker's audio GUID.** A sender may place audio on channels 2/3
+  and reserve channel 1 for video to keep concerns separated; the audio
+  channel index is a convention, not a constraint. When validating the
+  video marker's `audio_guid` against a user's audio interval GUIDs,
+  iterate the user's non-video channels (`flags & 0x10 == 0`) rather than
+  inspecting a fixed index. Prefer the channel whose current decode-state
+  GUID matches the marker; fall back to any active audio channel to seed
+  "user is broadcasting", otherwise the video will hold indefinitely
+  waiting for an audio interval that was always there on a different
+  channel.
 
 ---
 
@@ -459,4 +495,4 @@ GUID before applying the outer-length parser.
 | Camera capture, H.264 encode/decode, playback pacing | Platform app code — *not in this repo* |
 | End-to-end sync tests (26 Catch2 scenarios, Docker NINJAM server) | `tests/video-sync/` |
 
-*This repository is GPL v3.*
+*This repository is GPL v2, matching upstream Cockos NINJAM.*

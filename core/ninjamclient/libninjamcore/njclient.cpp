@@ -26,7 +26,14 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <sys/time.h>
 #include "njclient.h"
+
+// Monotonic-ish wall clock in milliseconds, for the voice-chat video delay line.
+static double njc_now_ms() {
+  struct timeval tv; gettimeofday(&tv, NULL);
+  return (double)tv.tv_sec * 1000.0 + (double)tv.tv_usec / 1000.0;
+}
 #include "mpb.h"
 
 // Video sync debug logging. On iOS routes via synclog_emit_oslog (defined in
@@ -492,6 +499,12 @@ public:
 #define LIVE_PREBUFFER 128
 #define LIVE_ENC_BLOCKSIZE1 2048
 #define LIVE_ENC_BLOCKSIZE2 64
+// Voice-chat live video delay line: NINJAM voice-chat audio keeps a ~0.75s jitter
+// buffer (srate*3/4, see mixInChannel), so frame-on-arrival video would run ~0.75s
+// ahead of the audio. Hold each live video frame this long so it lands in sync with
+// the audio, without the interval quantization of the SWAP path. Tune to match the
+// audio buffer depth if that constant changes.
+#define VIDEO_LIVE_DELAY_MS 750.0
 
 
 #define NJ_PORT 2049
@@ -912,6 +925,22 @@ void NJClient::AudioProc(float **inbuf, int innch, float **outbuf, int outnch, i
       {
         VideoRecvState *vs = m_video_streams.Get(vi);
         if (!vs) continue;
+
+        // Voice-chat live video: release delayed frames whose hold time elapsed, so
+        // the live video lands in sync with the ~0.75s-buffered voice-chat audio.
+        if (vs->live_delay_q.GetSize() > 0) {
+          double now = njc_now_ms();
+          while (vs->live_delay_q.GetSize() > 0) {
+            LiveDelayFrame *df = vs->live_delay_q.Get(0);
+            if (df->deliver_at_ms > now) break;
+            if (VideoFrameReady_Callback && df->data.GetSize() > 0) {
+              VideoFrameReady_Callback(VideoFrameReady_User,
+                vs->stream_username, vs->stream_chidx, df->fourcc,
+                df->frame_idx, df->total_frames, df->data.Get(), df->data.GetSize());
+            }
+            vs->live_delay_q.Delete(0, true);
+          }
+        }
 
         int readyFrames = vs->playing.active ? vs->playing.frameCount : 0;
         int expected = vs->expected_frames > 0 ? vs->expected_frames : readyFrames;
@@ -1409,6 +1438,7 @@ int NJClient::Run() // nonzero if sleep ok
                   memcpy(vs->accumulating.guid, dib.guid, 16);
                   vs->accumulating.active = true;
                   vs->accumulating.interval_seq = m_sync_interval_cnt;
+                  vs->live_frame_idx = 0; // reset per-interval live counter (voice-chat frame-on-arrival)
                   SYNCLOG("video BEGIN: key=%s interval=%d seq=%d next.active=%d", vs->key, m_sync_interval_cnt, vs->accumulating.interval_seq, vs->next.active ? 1 : 0);
                   m_video_recv_cs.Leave();
 
@@ -1466,6 +1496,24 @@ int NJClient::Run() // nonzero if sleep ok
                       if (!vs) vs = findOrCreateVideoStream(tracker->username, tracker->chidx);
                       bool appending = vs->append_active &&
                                        !memcmp(vs->append_guid, diw.guid, 16);
+
+                      // Voice-chat (live) video: if the SENDER's audio channel is in
+                      // NINJAM voice-chat mode (flags&2), its audio streams continuously
+                      // with LIVE_PREBUFFER (~16ms) instead of the 1-interval delay. The
+                      // video frames also stream over the wire in real time (QueueVideoFrame
+                      // sends each frame immediately), so the normal accumulate+SWAP path
+                      // just adds a needless ~1-interval delay and desyncs it from the audio.
+                      // Mirror the audio: deliver each video frame the moment it arrives.
+                      // Detect via the user's non-video channel flags (skip 0x10 video-only).
+                      bool userIsLive = false;
+                      for (int lui = 0; lui < m_remoteusers.GetSize(); lui++) {
+                        RemoteUser *lru = m_remoteusers.Get(lui);
+                        if (!lru || strcmp(lru->name.Get(), tracker->username)) continue;
+                        for (int lci = 0; lci < MAX_USER_CHANNELS; lci++) {
+                          if (!(lru->channels[lci].flags & 0x10) && (lru->channels[lci].flags & 2)) { userIsLive = true; break; }
+                        }
+                        break;
+                      }
 
                       // Route WRITE by guid to the correct buffer. Prevents tail WRITEs
                       // of previous downloads from polluting accumulating or triggering
@@ -1536,6 +1584,32 @@ int NJClient::Run() // nonzero if sleep ok
                             int frameStart = target->frameOffsets.Get()[fc - 1];
                             int frameSize = target->data.GetSize() - frameStart;
 
+                            if (userIsLive) {
+                              // Live: enqueue the frame into the delay line instead of
+                              // delivering immediately. The video streams over the wire in
+                              // real time, but NINJAM voice-chat audio holds a ~0.75s jitter
+                              // buffer (srate*3/4, mixInChannel), so real-time video would run
+                              // ~0.75s ahead. Hold each frame VIDEO_LIVE_DELAY_MS; the pump
+                              // (audio thread) releases it in sync with the audio. Keeps
+                              // frame-on-arrival smoothness (no interval quantization) and
+                              // never enters the SWAP/pump-from-playing path. live_frame_idx
+                              // runs 0..N within the interval (reset on BEGIN): 0=marker,
+                              // 1=SPS/PPS, 2=IDR, 3+=P. Each frame has a 4B length prefix (+4).
+                              if (frameSize > 4) {
+                                LiveDelayFrame *df = new LiveDelayFrame;
+                                df->deliver_at_ms = njc_now_ms() + VIDEO_LIVE_DELAY_MS;
+                                df->fourcc = tracker->fourcc;
+                                df->frame_idx = vs->live_frame_idx;
+                                df->total_frames = vs->live_frame_idx + 1;
+                                df->data.Resize(frameSize - 4, false);
+                                memcpy(df->data.Get(), (char*)target->data.Get() + frameStart + 4, frameSize - 4);
+                                vs->live_delay_q.Add(df);
+                              }
+                              vs->live_frame_idx++;
+                              target->data.Resize(frameStart, false);
+                              target->frameOffsets.Resize(fc - 1, false);
+                              target->frameCount = fc - 1;
+                            } else {
                             // Parse sync marker from first frame of accumulating buffer.
                             // Wire format: [4B prefix=20][4B swap_count][16B audio_guid] = 24 B.
                             // Legacy 4-byte swap-only marker: [4B prefix=4][4B swap] = 8 B.
@@ -1567,6 +1641,7 @@ int NJClient::Run() // nonzero if sleep ok
                               vs->accumulating.frameCount = 0;
                               vs->accumulating.pending_remaining = 0;
                             }
+                            } // end else (normal accumulate+SWAP; live handled above)
                           }
                         }
                       }
@@ -2221,6 +2296,7 @@ void NJClient::ResetAllVideoSyncState()
     vs->synced = false;
     vs->last_played_sender_seq = -1;
     memset(vs->last_played_audio_guid, 0, 16);
+    vs->live_delay_q.Empty(true); // drop stale voice-chat frames on foreground reset
     resetCount++;
   }
   m_video_recv_cs.Leave();
@@ -2311,7 +2387,7 @@ void NJClient::process_samples(float **inbuf, int innch, float **outbuf, int out
   {
     Local_Channel *lc=m_locchannels.Get(u);
     if (!justmonitor && lc->channel_idx >= m_max_localch) continue; // server does not allow this channel index
-    if (lc->flags & 0x10) continue; // skip video-only channels in monitor mix (avoids L→R bleed when camera is on)
+    if (lc->flags & 0x10) continue; // skip video-only channels in monitor mix
 
     int sc=lc->src_channel&1023;
     int sc_nch=(lc->src_channel&1024)?2:1;
@@ -3073,11 +3149,19 @@ void NJClient::on_new_interval()
       const char *dname = duser->name.Get();
       const char *dAt = strchr(dname, '@');
       int dNameLen = dAt ? (int)(dAt - dname) : (int)strlen(dname);
-      SYNCLOG("SWAP#%d audio: user=%.*s ds=%s nds0=%s nds1=%s",
-        m_sync_interval_cnt, dNameLen, dname,
-        duser->channels[0].ds ? "Y" : "N",
-        duser->channels[0].next_ds[0] ? "Y" : "N",
-        duser->channels[0].next_ds[1] ? "Y" : "N");
+      // Scan all non-video channels — clients can place audio on any index.
+      int firstAudioCh = -1;
+      bool anyDs = false, anyNds0 = false, anyNds1 = false;
+      for (int ci = 0; ci < MAX_USER_CHANNELS; ci++) {
+        RemoteUser_Channel *rc = &duser->channels[ci];
+        if (rc->flags & 0x10) continue;
+        if (rc->ds) { anyDs = true; if (firstAudioCh < 0) firstAudioCh = ci; }
+        if (rc->next_ds[0]) anyNds0 = true;
+        if (rc->next_ds[1]) anyNds1 = true;
+      }
+      SYNCLOG("SWAP#%d audio: user=%.*s ch=%d ds=%s nds0=%s nds1=%s",
+        m_sync_interval_cnt, dNameLen, dname, firstAudioCh,
+        anyDs ? "Y" : "N", anyNds0 ? "Y" : "N", anyNds1 ? "Y" : "N");
     }
   }
 
@@ -3168,20 +3252,53 @@ void NJClient::on_new_interval()
       for (int ui = 0; ui < m_remoteusers.GetSize(); ui++) {
         RemoteUser *ru = m_remoteusers.Get(ui);
         if (!ru || strcmp(ru->name.Get(), vs->next.username)) continue;
-        senderDs = ru->channels[0].ds;
-        if (senderDs) {
+        // Scan ALL channels (not just channel 0): some implementations
+        // (e.g. JamWide) legitimately broadcast audio on non-zero channel
+        // indices to keep the video slot free of audio. Prefer a channel
+        // whose ds->guid matches the marker's audio_guid; fall back to
+        // the first non-video active channel so audioHasData reflects
+        // "user is broadcasting", not "user broadcasts on channel 0".
+        for (int ci = 0; ci < MAX_USER_CHANNELS; ci++) {
+          RemoteUser_Channel *rc = &ru->channels[ci];
+          if (rc->flags & 0x10) continue; // skip video channels
+          DecodeState *ds = rc->ds;
+          if (!ds) continue;
           audioHasData = true;
-          if (hasGuid && !memcmp(senderDs->guid, videoAudioGuid, 16)) {
+          if (!senderDs) senderDs = ds; // first-found fallback
+          if (hasGuid && !memcmp(ds->guid, videoAudioGuid, 16)) {
+            senderDs = ds;
             guidMatch = true;
             matchType = 1;
+            break;
           }
-          if (hasGuid && !guidMatch && !memcmp(vs->prev_ds_guid, videoAudioGuid, 16)) {
-            guidMatch = true;
-            matchType = 2;
-          }
+        }
+        // prev_ds_guid is per-video-state (not per-channel) — check after
+        // the channel scan if no current ds matched.
+        if (audioHasData && hasGuid && !guidMatch &&
+            !memcmp(vs->prev_ds_guid, videoAudioGuid, 16)) {
+          guidMatch = true;
+          matchType = 2;
         }
         break;
       }
+
+      // VOICE-CHAT DIAG: is this video's user in NINJAM live (flags&2) mode? Log
+      // the full sync state so we can see WHY the video mis-syncs against the
+      // sooner-playing live (LIVE_PREBUFFER) audio — which ds it matches, the
+      // interval offset, whether audio data is present.
+      bool videoIsLive = false;
+      for (int lui = 0; lui < m_remoteusers.GetSize(); lui++) {
+        RemoteUser *lru = m_remoteusers.Get(lui);
+        if (!lru || strcmp(lru->name.Get(), vs->next.username)) continue;
+        for (int lci = 0; lci < MAX_USER_CHANNELS; lci++)
+          if (!(lru->channels[lci].flags & 0x10) && (lru->channels[lci].flags & 2)) { videoIsLive = true; break; }
+        break;
+      }
+      SYNCLOG("SWAP#%d VCDIAG: key=%s live=%d audioHasData=%d guidMatch=%d matchType=%d ds=%02x%02x prev=%02x%02x vid=%02x%02x hasGuid=%d vidSeq=%d",
+        m_sync_interval_cnt, vs->key, videoIsLive?1:0, audioHasData?1:0, guidMatch?1:0, matchType,
+        senderDs?senderDs->guid[0]:0, senderDs?senderDs->guid[1]:0,
+        vs->prev_ds_guid[0], vs->prev_ds_guid[1],
+        videoAudioGuid[0], videoAudioGuid[1], hasGuid?1:0, vs->next.sender_seq);
 
       // HOLD cap: after this many consecutive mismatches, drop next instead of force-playing.
       // Force-playing on mismatch was the primary cause of "video earlier than audio" — by the

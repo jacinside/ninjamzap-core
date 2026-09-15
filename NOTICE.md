@@ -4,8 +4,13 @@
 
 NinjamZap is a mobile client for NINJAM (Network Jam sessions).
 
-**Copyright (C) 2025 Javier Alejandro Cordero**
-Licensed under GPL v3 - see LICENSE file
+**Copyright (C) 2025-2026 Javier Alejandro Cordero**
+Licensed under GPL v2 — see [LICENSE](LICENSE) file.
+
+License matches upstream Cockos NINJAM (GPL v2 with the "version 2 of
+the License, or (at your option) any later version" clause). Staying
+on v2 keeps the whole NINJAM ecosystem interoperable without forcing
+any downstream consumer to relicense.
 
 ---
 
@@ -38,10 +43,10 @@ Special thanks to **Antanas Bruzas** for pioneering NINJAM on iOS and making the
 
 ## Third-Party Components
 
-### njclient (GPL v3)
+### njclient (GPL v2)
 NINJAM client implementation
 **Copyright**: Cockos/Justin Frankel
-**License**: GPL v3
+**License**: GPL v2 (the upstream allows "v2 or any later version"; we keep v2 for ecosystem interop)
 **Source**: Included in NINJAM distribution
 
 ### WDL - Cockos Audio Library
@@ -76,7 +81,7 @@ Special thanks to:
 
 ## License Information
 
-This software is licensed under the **GNU General Public License v3.0** (GPL v3).
+This software is licensed under the **GNU General Public License v2.0** (GPL v2).
 See the LICENSE file for full terms.
 
 This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
@@ -96,4 +101,4 @@ GitHub: https://github.com/justinfrankel/ninjam
 
 ---
 
-Last updated: 2025-01-20
+Last updated: 2026-06-17 (relicensed from GPL v3 to GPL v2 for NINJAM ecosystem interop)

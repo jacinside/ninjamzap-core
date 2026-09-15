@@ -143,7 +143,10 @@ void NinjamClientAdapter::connect(const std::string& host, int port) {
     if (connected) {
         disconnect();
     }
-  
+    // Fresh session: drop any stale JS-id -> NJClient channel_idx mappings so
+    // local channels are re-allocated contiguous slots from 0 on this connect.
+    localIdToNjIdx.clear();
+
     std::ostringstream oss;
     oss << host << ":" << port;
     std::string hostPort = oss.str();
@@ -422,20 +425,49 @@ void NinjamClientAdapter::sendAudio(const float* data, int size, int channelInde
 }
 
 void NinjamClientAdapter::removeLocalChannel(int channelIndex) {
-    client->gsNjClient()->DeleteLocalChannel(channelIndex);
+    int nj = njLocalIdx(channelIndex, false);
+    if (nj < 0) nj = channelIndex; // unknown id: fall back to raw (legacy behavior)
+    localIdToNjIdx.erase(channelIndex);
+    client->gsNjClient()->DeleteLocalChannel(nj);
     // Tell the server the channel set changed so other clients drop the
     // removed channel — DeleteLocalChannel alone doesn't notify.
     client->gsNjClient()->NotifyServerOfChannelChange();
 }
 
 void NinjamClientAdapter::setLocalChannelMonitoring(int index, float volume, float pan, bool mute, bool solo) {
-    client->gsNjClient()->SetLocalChannelMonitoring(index, true, volume, true, pan, true, mute, true, solo);
+    int nj = njLocalIdx(index, true);
+    client->gsNjClient()->SetLocalChannelMonitoring(nj, true, volume, true, pan, true, mute, true, solo);
 }
 
 
+int NinjamClientAdapter::njLocalIdx(int jsChannelId, bool createIfMissing) {
+    auto it = localIdToNjIdx.find(jsChannelId);
+    if (it != localIdToNjIdx.end()) return it->second;
+    if (!createIfMissing) return -1;
+    // Allocate the lowest free contiguous slot so NJClient channel_idx stays
+    // within 0..maxLocalCh-1 regardless of the (possibly sparse) JS channel id.
+    int slot = 0;
+    for (bool taken = true; taken; ) {
+        taken = false;
+        for (const auto& kv : localIdToNjIdx) {
+            if (kv.second == slot) { taken = true; ++slot; break; }
+        }
+    }
+    localIdToNjIdx[jsChannelId] = slot;
+    return slot;
+}
+
 void NinjamClientAdapter::SetLocalChannelInfo(int index, const char* name, bool setsrcch, int srcch, bool setxmit, bool xmit, bool setflags, int flags) {
+    int nj = njLocalIdx(index, true);
+    // Diagnostic: a server with a low maxchan will silently drop channels whose
+    // channel_idx exceeds its limit (process_samples: channel_idx >= m_max_localch).
+    int maxLocal = client->gsNjClient()->GetMaxLocalChannels();
+    if (connected && maxLocal > 0 && nj >= maxLocal) {
+        printf("NinjamClientAdapter::SetLocalChannelInfo: WARNING jsId=%d -> njIdx=%d exceeds server maxLocalCh=%d; channel will not transmit\n", index, nj, maxLocal);
+    }
+    printf("NinjamClientAdapter::SetLocalChannelInfo: jsId=%d -> njIdx=%d name=%s srcch=%d xmit=%d\n", index, nj, name ? name : "(null)", srcch, xmit);
     client->gsNjClient()->SetLocalChannelInfo(
-                                              index,
+                                              nj,
                                               name, //--> name : Nombre del canal
                                               setsrcch, //--> setsrcch
                                               srcch,  // --> srcchannel : 0 para mono, 1024 para estéreo
@@ -453,10 +485,11 @@ void NinjamClientAdapter::SetLocalChannelInfo(int index, const char* name, bool 
 }
 
 void NinjamClientAdapter::setLocalChannelBitrate(int index, int bitrate) {
+    int nj = njLocalIdx(index, true);
     // Pass nullptr for name + all setX flags false except setbitrate — NJClient
     // skips fields whose setX is false, and skips name when it's null.
     client->gsNjClient()->SetLocalChannelInfo(
-                                              index,
+                                              nj,
                                               nullptr,    // name unchanged
                                               false, 0,   // setsrcch=false
                                               true, bitrate, // setbitrate=true
@@ -773,7 +806,8 @@ void NinjamClientAdapter::setUserChannelState(int userId, int channelId,bool set
 
 void NinjamClientAdapter::setLocalChannelVolume(int channelId, float volume) {
     if (connected && client) {
-        client->setLocalChannelVolume(channelId, volume);
+        int nj = njLocalIdx(channelId, true);
+        client->setLocalChannelVolume(nj, volume);
     }
 }
 

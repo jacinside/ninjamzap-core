@@ -383,6 +383,16 @@ protected:
     }
   };
 
+  // One frame held in the voice-chat video delay line. Enqueued on the net thread
+  // (frame-on-arrival), released by the pump on the audio thread after deliver_at_ms.
+  struct LiveDelayFrame {
+    double deliver_at_ms;
+    unsigned int fourcc;
+    int frame_idx;
+    int total_frames;
+    WDL_HeapBuf data; // frame bytes, 4B length-prefix already stripped
+  };
+
   // Per-user video receive state.
   // Pipeline: accumulating (during interval download) → next (after start/END) →
   // pending (1-swap defer to align with audio output) → playing. The pending slot adds
@@ -412,11 +422,14 @@ protected:
     int  last_played_sender_seq; // sender_seq of the last interval we played (-1 if never)
     unsigned char last_played_audio_guid[16]; // audio_guid of the last interval we played
     int  drop_resync_count;     // diagnostic: number of force-resyncs (HOLD cap exceeded)
+    int  live_frame_idx;        // voice-chat (flags&2) live video: per-interval frame counter (reset on BEGIN) for frame-on-arrival delivery
+    WDL_PtrList<LiveDelayFrame> live_delay_q; // voice-chat video delay line (~audio buffer depth) to align live video with audio
     VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false), append_to_pending(false), stream_chidx(0),
-                       empty_count(0), hold_count(0), synced(false), last_played_sender_seq(-1), drop_resync_count(0) {
+                       empty_count(0), hold_count(0), synced(false), last_played_sender_seq(-1), drop_resync_count(0), live_frame_idx(0) {
       memset(append_guid, 0, 16); key[0] = 0; stream_username[0] = 0; memset(prev_ds_guid, 0, 16);
       memset(last_played_audio_guid, 0, 16);
     }
+    ~VideoRecvState() { live_delay_q.Empty(true); }
   };
 
   WDL_PtrList<VideoRecvState> m_video_streams;

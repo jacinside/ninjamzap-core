@@ -1,10 +1,19 @@
 # NinjamZap Core
 
-**GPL-licensed NINJAM Client Core for Mobile Platforms**
+**A derivative of [Cockos NINJAM](https://ninjam.com) (GPL v2) — mobile-friendly C++ client core with cross-platform wrappers and a real-time video extension.**
 
-Cross-platform C++ NINJAM implementation with platform-specific wrappers for iOS (and future Android support).
+The C++ NINJAM client (`core/ninjamclient/libninjamcore/njclient.{cpp,h}`,
+WDL, mpb, netmsg) is taken from Cockos NINJAM by Justin Frankel. The iOS
+bridge layer (`NinjamClientBridge`, `NinjamClientAdapter`) descends from
+[abNinjam](https://github.com/antanasbruzas/abNinjam) by Antanas Bruzas.
+Everything new — the video sync mechanism, the platform wrappers, the
+multi-channel send pipeline, the docs — is added by Javier Cordero on
+top under the same GPL v2 license, matching upstream so the whole
+NINJAM ecosystem can interoperate without relicensing friction.
+Full file-by-file lineage and licensing in [**NOTICE.md**](NOTICE.md).
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![License: GPL v2](https://img.shields.io/badge/License-GPLv2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0)
+[![Based on: Cockos NINJAM](https://img.shields.io/badge/based%20on-Cockos%20NINJAM-orange.svg)](https://ninjam.com)
 [![Platform](https://img.shields.io/badge/Platform-iOS%20%7C%20Android-green.svg)]()
 
 ---
@@ -21,17 +30,17 @@ Created by Justin Frankel and Cockos. Learn more: [ninjam.com](https://ninjam.co
 
 ```
 ninjamzap-core/
-├── core/                          # Cross-platform C++ (GPL v3)
+├── core/                          # Cross-platform C++ (GPL v2)
 │   └── ninjamclient/
 │       └── libninjamcore/         # NINJAM client core (njclient, WDL, Vorbis)
 │
-├── platforms/                     # Platform-specific wrappers (GPL v3)
+├── platforms/                     # Platform-specific wrappers (GPL v2)
 │   ├── ios/
 │   │   ├── NativeAudioModule/     # Obj-C++/Swift bridge
 │   │   └── libs_compiled/         # Pre-built Vorbis xcframeworks
 │   └── android/                   # Planned
 │
-├── LICENSE                        # GPL v3
+├── LICENSE                        # GPL v2
 └── NOTICE.md                      # Attributions
 ```
 
@@ -79,7 +88,7 @@ Full attributions in [NOTICE.md](NOTICE.md).
 
 ## License
 
-GNU General Public License v3.0. See [LICENSE](LICENSE).
+GNU General Public License v2.0. See [LICENSE](LICENSE).
 
 ```
 NinjamZap Core - GPL-licensed NINJAM Client
