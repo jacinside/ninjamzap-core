@@ -15,6 +15,18 @@ minor releases — once it stabilizes the project moves to `1.0.0`):
 - **PATCH** — receiver/sender bug fixes that do not alter the wire format
   or spec.
 
+## [0.2.3] — 2026-10-01
+
+### Fixed
+
+- **Video tagged with the translated channel index.** Since 0.2.2 the adapter
+  announces each local channel on a contiguous NINJAM `channel_idx`, but
+  `setVideoChannel` / `rawDataSendBegin` still passed the caller-facing id. A
+  sender with a second audio channel created before the camera announced its
+  video channel (flags `0x10`) on slot 2 while tagging the video chunks with
+  `chidx` 1, so receivers could not match the stream to its channel and showed
+  no video. Both calls now go through the same id → `channel_idx` translation.
+
 ## [0.2.2] — 2026-08-08
 
 ### Fixed

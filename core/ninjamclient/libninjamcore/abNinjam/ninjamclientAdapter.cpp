@@ -974,7 +974,11 @@ void NinjamClientAdapter::setOnRawData(OnRawDataCallback callback) {
 
 void NinjamClientAdapter::rawDataSendBegin(unsigned char outGuid[16], unsigned int fourcc, int chidx, int estsize) {
     if (!connected || !client) return;
-    client->rawDataSendBegin(outGuid, fourcc, chidx, estsize);
+    // chidx is the caller-facing local channel id: tag the data with the same
+    // NINJAM channel_idx the channel was announced on (see njLocalIdx), or
+    // receivers can't match the stream to its channel.
+    int nj = njLocalIdx(chidx, false);
+    client->rawDataSendBegin(outGuid, fourcc, nj >= 0 ? nj : chidx, estsize);
 }
 
 void NinjamClientAdapter::rawDataSendWrite(const unsigned char guid[16], const void *data, int dataLen, bool isEnd) {
@@ -1004,7 +1008,8 @@ void NinjamClientAdapter::setVideoFrameReadyCallback(NJClient::VideoFrameReadyCa
 
 void NinjamClientAdapter::setVideoChannel(int chidx, unsigned int fourcc) {
     if (!client) return;
-    client->gsNjClient()->SetVideoChannel(chidx, fourcc);
+    // Same id → channel_idx translation as SetLocalChannelInfo.
+    client->gsNjClient()->SetVideoChannel(njLocalIdx(chidx, true), fourcc);
 }
 
 void NinjamClientAdapter::stopVideoChannel() {
