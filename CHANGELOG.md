@@ -15,6 +15,15 @@ minor releases — once it stabilizes the project moves to `1.0.0`):
 - **PATCH** — receiver/sender bug fixes that do not alter the wire format
   or spec.
 
+## [0.3.1] — 2026-10-02
+
+### Added
+
+- **`NinjamClientAdapter::getMaxLocalChannels()`** — the number of local
+  channels the server lets this user transmit (its `maxchan`, known after the
+  auth reply). Channels whose index reaches it are silently not sent, so hosts
+  can cap how many local channels the user may add.
+
 ## [0.3.0] — 2026-10-02
 
 ### Added

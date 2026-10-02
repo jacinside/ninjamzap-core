@@ -718,6 +718,10 @@ void NinjamClientAdapter::processAudioOutN(
     }
 }
 
+int NinjamClientAdapter::getMaxLocalChannels() {
+    return client ? client->gsNjClient()->GetMaxLocalChannels() : 0;
+}
+
 void NinjamClientAdapter::setMasterVolume(float volume, float pan, bool mute) {
     masterVolume = volume;
     masterPan = pan;

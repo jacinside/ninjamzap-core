@@ -170,6 +170,11 @@ public:
     // Max input / output channels processAudioN / processAudioOutN accept.
     static const int kMaxIOChannels = 64;
 
+    // Local channels the server lets this user transmit (its `maxchan`, known
+    // after the auth reply; NINJAM's default of 32 before that). Channels whose
+    // index reaches it are silently not sent — hosts should cap new channels.
+    int getMaxLocalChannels();
+
     // Master volume controls
     void setMasterVolume(float volume, float pan, bool mute);
     
