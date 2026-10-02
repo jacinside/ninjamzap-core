@@ -15,6 +15,24 @@ minor releases — once it stabilizes the project moves to `1.0.0`):
 - **PATCH** — receiver/sender bug fixes that do not alter the wire format
   or spec.
 
+## [0.3.0] — 2026-10-02
+
+### Added
+
+- **`processAudioOutN` — N inputs to N outputs.** Like `processAudioN` but the
+  output is a caller-defined set of `outnch` deinterleaved channels instead of
+  fixed stereo + metronome, so remote channels (`SetUserChannelState` with
+  `setoutch`), local monitors and the metronome (`setMetronomeChannel`) land on
+  whichever output channel or pair they are routed to. Typical layout: hardware
+  outputs `0..H-1` plus the metronome alone on channel `H` (click-free
+  recording, metronome placed by the host).
+
+### Changed
+
+- **Up to 64 input channels** in `processAudioN` / `processAudioOutN` (was 16) —
+  large interfaces and macOS aggregates expose 18–32+ channels. Exposed as
+  `NinjamClientAdapter::kMaxIOChannels`.
+
 ## [0.2.3] — 2026-10-01
 
 ### Fixed

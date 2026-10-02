@@ -153,6 +153,23 @@ public:
         float* outBufferMetro,
         int numFrames);
 
+    // N inputs → N outputs. Like processAudioN() but the output is a set of
+    // `outnch` deinterleaved channels instead of fixed stereo + metronome, so
+    // remote channels (SetUserChannelState setoutch), local monitors
+    // (SetLocalChannelInfo setoutch) and the metronome (setMetronomeChannel)
+    // land on whichever output channel/pair they are routed to. The caller
+    // decides the layout, e.g. hardware outputs 0..H-1 plus the metronome on
+    // its own channel H for click-free recording.
+    void processAudioOutN(
+        float** inChannels,
+        int innch,
+        float** outChannels,
+        int outnch,
+        int numFrames);
+
+    // Max input / output channels processAudioN / processAudioOutN accept.
+    static const int kMaxIOChannels = 64;
+
     // Master volume controls
     void setMasterVolume(float volume, float pan, bool mute);
     
@@ -273,6 +290,10 @@ private:
     // so the legacy paths are untouched. Allocated once in setAudioConfig().
     float** inputBufferN;
     int     inputBufferNCount;
+    // Output staging for processAudioOutN() (kMaxIOChannels + 1 so a caller
+    // can place the metronome after a full set of hardware outputs).
+    float** outputBufferN;
+    int     outputBufferNCount;
     
     // Metronome settings
     bool metronomeEnabled;

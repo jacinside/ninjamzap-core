@@ -34,6 +34,8 @@ NinjamClientAdapter::NinjamClientAdapter()
     , metroOutputBuffer(nullptr)
     , inputBufferN(nullptr)
     , inputBufferNCount(0)
+    , outputBufferN(nullptr)
+    , outputBufferNCount(0)
     , metronomeEnabled(true)
     , metronomeVolume(0.5f)
     , metronomePan(0.0f)
@@ -74,6 +76,13 @@ NinjamClientAdapter::~NinjamClientAdapter() {
             delete[] inputBufferN[i];
         }
         delete[] inputBufferN;
+    }
+
+    if (outputBufferN) {
+        for (int i = 0; i < outputBufferNCount; i++) {
+            delete[] outputBufferN[i];
+        }
+        delete[] outputBufferN;
     }
 
     delete client;
@@ -305,13 +314,23 @@ void NinjamClientAdapter::setAudioConfig(int sampleRate, int channels) {
     }
 
     // Multi-channel input staging for processAudioN(). Fixed max-channel
-    // allocation done once — covers any USB interface channel count we
-    // realistically support (free tier 4, Pro up to 16). Freed in destructor.
+    // allocation done once — large interfaces and Mac aggregates expose 18–32+
+    // channels. Freed in destructor.
     if (!inputBufferN) {
-        inputBufferNCount = 16;
+        inputBufferNCount = kMaxIOChannels;
         inputBufferN = new float*[inputBufferNCount];
         for (int i = 0; i < inputBufferNCount; i++) {
             inputBufferN[i] = new float[8192];
+        }
+    }
+
+    // Output staging for processAudioOutN(): hardware outputs + one extra
+    // (e.g. the metronome on its own channel). Freed in destructor.
+    if (!outputBufferN) {
+        outputBufferNCount = kMaxIOChannels + 1;
+        outputBufferN = new float*[outputBufferNCount];
+        for (int i = 0; i < outputBufferNCount; i++) {
+            outputBufferN[i] = new float[8192];
         }
     }
 }
@@ -651,6 +670,52 @@ void NinjamClientAdapter::processAudioN(
     if (outBufferLeft)  memcpy(outBufferLeft,  outputBuffer[0],   numFrames * sizeof(float));
     if (outBufferRight) memcpy(outBufferRight, outputBuffer[1],   numFrames * sizeof(float));
     if (outBufferMetro) memcpy(outBufferMetro, metroOutputBuffer, numFrames * sizeof(float));
+}
+
+void NinjamClientAdapter::processAudioOutN(
+    float** inChannels,
+    int innch,
+    float** outChannels,
+    int outnch,
+    int numFrames
+) {
+    this->numFrames = numFrames;
+    int nOut = outnch;
+    if (nOut > outputBufferNCount) nOut = outputBufferNCount;
+
+    if (!connected || numFrames <= 0 || nOut < 1 || !inputBufferN || !outputBufferN) {
+        for (int c = 0; c < outnch; c++) {
+            if (outChannels && outChannels[c]) memset(outChannels[c], 0, sizeof(float) * (numFrames > 0 ? numFrames : 0));
+        }
+        return;
+    }
+
+    // Stage inputs into owned buffers (same contract as processAudioN).
+    int n = innch;
+    if (n < 1) n = 1;
+    if (n > inputBufferNCount) n = inputBufferNCount;
+    for (int c = 0; c < n; c++) {
+        if (inChannels && inChannels[c]) {
+            memcpy(inputBufferN[c], inChannels[c], numFrames * sizeof(float));
+        } else {
+            memset(inputBufferN[c], 0, numFrames * sizeof(float));
+        }
+    }
+
+    // NJClient mixes into the output buffers — start from silence.
+    for (int c = 0; c < nOut; c++) {
+        memset(outputBufferN[c], 0, numFrames * sizeof(float));
+    }
+    client->audiostreamOnSamples(inputBufferN, n, outputBufferN, nOut, numFrames, sampleRate);
+
+    for (int c = 0; c < outnch; c++) {
+        if (!outChannels || !outChannels[c]) continue;
+        if (c < nOut) {
+            memcpy(outChannels[c], outputBufferN[c], numFrames * sizeof(float));
+        } else {
+            memset(outChannels[c], 0, numFrames * sizeof(float));
+        }
+    }
 }
 
 void NinjamClientAdapter::setMasterVolume(float volume, float pan, bool mute) {
