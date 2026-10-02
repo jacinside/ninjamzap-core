@@ -14,14 +14,17 @@ make test       # boots ninjamzap-server-test in Docker, runs all scenarios
 make clean
 ```
 
-`make test` requires a running Docker daemon. The server container is started
-by `docker/run-server.sh` and torn down on exit.
+`make test` requires a running Docker daemon and the `ninjamzap-server-test`
+image (`docker build -t ninjamzap-server-test:latest <ninjamzap-server checkout>`).
+The server container is started by `docker/run-server.sh` (bypassing the
+image's production entrypoint) and torn down on exit. Builds on macOS and
+Linux; CI runs it on every push (`.github/workflows/video-sync.yml`).
 
 ### Run a single scenario
 
 ```bash
-make test -- "[scenario8]"          # tag filter
-make test -- "08_play_promote"      # name substring
+make test TEST_ARGS='"[scenario8]"'         # tag filter
+make test TEST_ARGS='"08_play_promote*"'    # name pattern
 NJ_TEST_DEBUG=1 make test           # verbose SYNCLOG echo to stderr
 ```
 

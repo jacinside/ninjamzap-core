@@ -49,7 +49,9 @@ static double njc_now_ms() {
 #else
 #define SYNCLOG_ENABLED 0
 #endif
-#if SYNCLOG_ENABLED && defined(__APPLE__)
+// NINJAMCORE_SYNCLOG_HOOK routes SYNCLOG through synclog_emit_oslog on any
+// platform — the video-sync test harness provides it to capture events.
+#if SYNCLOG_ENABLED && (defined(__APPLE__) || defined(NINJAMCORE_SYNCLOG_HOOK))
 extern "C" void synclog_emit_oslog(const char *msg);
 #define SYNCLOG(...) do { char _b[512]; snprintf(_b,sizeof(_b),"[SYNCLOG] " __VA_ARGS__); synclog_emit_oslog(_b); } while(0)
 #elif SYNCLOG_ENABLED

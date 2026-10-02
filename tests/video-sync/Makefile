@@ -8,8 +8,14 @@
 #   make test       # build + run all scenarios (boots server in Docker)
 #   make clean
 
-CXX      ?= clang++
-CC       ?= clang
+# `?=` would not override make's built-in defaults (c++/cc), so only replace
+# them when they are still the defaults — an explicit CXX=/CC= still wins.
+ifeq ($(origin CXX),default)
+CXX      := clang++
+endif
+ifeq ($(origin CC),default)
+CC       := clang
+endif
 CXXSTD   ?= -std=c++17
 OPT      ?= -O0 -g
 WARN     ?= -Wall -Wno-unused-parameter -Wno-deprecated-declarations -Wno-deprecated-copy
@@ -27,7 +33,9 @@ BUILD    := $(CURDIR)/build
 BREW_PREFIX ?= $(shell brew --prefix 2>/dev/null || echo /opt/homebrew)
 
 INCLUDES := -I$(CORE) -I$(WDL) -I$(VENDOR) -I$(HARNESS) -I$(BREW_PREFIX)/include
-DEFINES  := -DNINJAMCORE_HOST_BUILD=1 -D_DARWIN_C_SOURCE
+# DEBUG enables SYNCLOG in njclient.cpp (gated since the Release-build log
+# cleanup) — the harness asserts on SYNCLOG events via SyncLogCapture.
+DEFINES  := -DNINJAMCORE_HOST_BUILD=1 -DDEBUG=1 -DNINJAMCORE_SYNCLOG_HOOK=1 -D_DARWIN_C_SOURCE
 CXXFLAGS := $(CXXSTD) $(OPT) $(WARN) $(INCLUDES) $(DEFINES)
 CFLAGS   := $(OPT) $(WARN) $(INCLUDES) $(DEFINES)
 LDFLAGS  := -L$(BREW_PREFIX)/lib
@@ -49,8 +57,10 @@ CORE_C_OBJS := \
   $(BUILD)/core/vorbis_encoder.o
 
 # --- Harness + scenarios -------------------------------------------------
-HARNESS_SRCS := $(wildcard $(HARNESS)/*.cpp)
-SCEN_SRCS    := $(wildcard $(SCEN)/*.cpp)
+HARNESS_SRCS := $(sort $(wildcard $(HARNESS)/*.cpp))
+# Sorted: Catch2 runs scenarios in link order, and some leave server state
+# (BPM/BPI votes) behind — keep the order identical on every platform.
+SCEN_SRCS    := $(sort $(wildcard $(SCEN)/*.cpp))
 HARNESS_OBJS := $(HARNESS_SRCS:$(HARNESS)/%.cpp=$(BUILD)/harness/%.o)
 SCEN_OBJS    := $(SCEN_SRCS:$(SCEN)/%.cpp=$(BUILD)/scenarios/%.o)
 
@@ -105,10 +115,11 @@ clean:
 	rm -rf $(BUILD) video_sync_tests
 
 # Boots ninjamzap-server-test container, exports NJ_TEST_PORT, runs binary.
+# Catch2 arguments go in TEST_ARGS, e.g. make test TEST_ARGS='"[scenario8]"'.
 test: video_sync_tests
 	@OUT=$$(./docker/run-server.sh) && \
 	  NAME=$$(echo "$$OUT" | awk '{print $$1}') && \
 	  PORT=$$(echo "$$OUT" | awk '{print $$2}') && \
 	  echo "[test] server container=$$NAME port=$$PORT" && \
 	  trap "docker rm -f $$NAME >/dev/null 2>&1" EXIT && \
-	  NJ_TEST_HOST=127.0.0.1 NJ_TEST_PORT=$$PORT ./video_sync_tests
+	  NJ_TEST_HOST=127.0.0.1 NJ_TEST_PORT=$$PORT ./video_sync_tests $(TEST_ARGS)
