@@ -175,6 +175,15 @@ public:
     // index reaches it are silently not sent — hosts should cap new channels.
     int getMaxLocalChannels();
 
+    // Session archive (the classic NINJAM / ReaNinjam session folder): from the
+    // next interval on, every remote and local interval is kept as
+    // <dir>/<0-f>/<guid>.ogg and indexed in <dir>/clipsort.log. `dir` must
+    // exist. Returns false if an archive is already running.
+    bool startSessionArchive(const char *dir);
+    // Stops saving and closes clipsort.log with its "end" line. Files of
+    // intervals in progress complete normally.
+    void stopSessionArchive();
+
     // Master volume controls
     void setMasterVolume(float volume, float pan, bool mute);
     
@@ -237,6 +246,7 @@ public:
 
 
 private:
+    int archivePrevSaveMode = -1;
     // Clock sync variables
     double lastSyncTime = 0.0;
     double intervalStartTime = 0.0;

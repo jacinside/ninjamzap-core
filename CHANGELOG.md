@@ -15,6 +15,16 @@ minor releases — once it stabilizes the project moves to `1.0.0`):
 - **PATCH** — receiver/sender bug fixes that do not alter the wire format
   or spec.
 
+## [0.3.2] — 2026-10-02
+
+### Added
+
+- **Session archive** — `NinjamClientAdapter::startSessionArchive(dir)` /
+  `stopSessionArchive()` write the classic NINJAM / ReaNinjam session folder:
+  every remote and local interval kept as `<dir>/<0-f>/<guid>.OGG`, indexed in
+  `<dir>/clipsort.log` (closed with `end` on stop). Video channels are not
+  archived and keep flowing while archiving.
+
 ## [0.3.1] — 2026-10-02
 
 ### Added

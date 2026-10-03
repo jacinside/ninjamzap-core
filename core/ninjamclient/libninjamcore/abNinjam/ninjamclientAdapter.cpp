@@ -1,5 +1,7 @@
 // ninjamclientAdapter.cpp
 #include "ninjamclientAdapter.h"
+#include <cstdio>
+#include <string>
 // include SumpleProfiler
 //#include "SimpleProfiler.h"
 
@@ -715,6 +717,37 @@ void NinjamClientAdapter::processAudioOutN(
         } else {
             memset(outChannels[c], 0, numFrames * sizeof(float));
         }
+    }
+}
+
+bool NinjamClientAdapter::startSessionArchive(const char *dir) {
+    if (!client || !dir || !*dir) return false;
+    NJClient *nj = client->gsNjClient();
+    if (nj->config_savelocalaudio > 0) return false; // already archiving
+    archivePrevSaveMode = nj->config_savelocalaudio;
+    // Order matters: the audio and network threads read the work dir only
+    // while config_savelocalaudio > 0, so set the dir and log first and turn
+    // saving on last.
+    nj->SetWorkDir(const_cast<char *>(dir));      // creates the 0..f subfolders
+    nj->SetLogFile(const_cast<char *>("clipsort.log"));
+    nj->config_savelocalaudio = 1;                 // keep every interval as .ogg
+    return true;
+}
+
+void NinjamClientAdapter::stopSessionArchive() {
+    if (!client) return;
+    NJClient *nj = client->gsNjClient();
+    if (nj->config_savelocalaudio <= 0) return;
+    // Saving off first; intervals already being written finish normally.
+    // The work dir is left as is (no other thread reads it while saving is off).
+    nj->config_savelocalaudio = archivePrevSaveMode;
+    nj->SetLogFile(nullptr);                        // closes clipsort.log
+    // NJClient only writes the closing "end" line from its destructor; add it
+    // so the folder is a complete session log like a disconnect leaves.
+    std::string log = std::string(nj->GetWorkDir()) + "clipsort.log";
+    if (FILE *f = fopen(log.c_str(), "a")) {
+        fputs("end\n", f);
+        fclose(f);
     }
 }
 
