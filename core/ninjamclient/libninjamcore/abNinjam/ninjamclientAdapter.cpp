@@ -751,6 +751,10 @@ void NinjamClientAdapter::stopSessionArchive() {
     }
 }
 
+void NinjamClientAdapter::setLocalChannelOffset(int offset) {
+    if (client) client->gsNjClient()->SetLocalChannelOffset(offset < 0 ? 0 : offset);
+}
+
 int NinjamClientAdapter::getMaxLocalChannels() {
     return client ? client->gsNjClient()->GetMaxLocalChannels() : 0;
 }

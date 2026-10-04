@@ -15,6 +15,15 @@ minor releases — once it stabilizes the project moves to `1.0.0`):
 - **PATCH** — receiver/sender bug fixes that do not alter the wire format
   or spec.
 
+## [0.3.3] — 2026-10-04
+
+### Added
+
+- **Local monitor output** — `NinjamClientAdapter::setLocalChannelOffset(offset)`
+  sets the first output channel the local channels' monitor is mixed into
+  (NJClient's local channel offset), so a host can send it to a "master"
+  output pair on multi-output interfaces. Default 0 (unchanged behavior).
+
 ## [0.3.2] — 2026-10-02
 
 ### Added

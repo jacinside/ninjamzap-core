@@ -175,6 +175,12 @@ public:
     // index reaches it are silently not sent — hosts should cap new channels.
     int getMaxLocalChannels();
 
+    // Output (0-based first channel) the local channels' monitor lands on —
+    // the host's "master" output pair. Local channels have no per-channel
+    // output route, so this offset is all they need (NJClient adds it to each
+    // local channel's out index).
+    void setLocalChannelOffset(int offset);
+
     // Session archive (the classic NINJAM / ReaNinjam session folder): from the
     // next interval on, every remote and local interval is kept as
     // <dir>/<0-f>/<guid>.ogg and indexed in <dir>/clipsort.log. `dir` must
