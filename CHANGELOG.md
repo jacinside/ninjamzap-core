@@ -15,6 +15,16 @@ minor releases — once it stabilizes the project moves to `1.0.0`):
 - **PATCH** — receiver/sender bug fixes that do not alter the wire format
   or spec.
 
+## [0.3.4] — 2026-10-05
+
+### Fixed
+- Interval GUIDs no longer collide between clients started in the same second.
+  The RNG was seeded with `time(NULL)` only (1 s resolution), so two processes
+  created in the same second drew the same GUID sequence and receivers, which
+  key downloads by GUID, mixed their streams. `NJClient` now also mixes in a
+  high-resolution clock, the process id and the instance address (non-Windows).
+  Wire format unchanged. New test: scenario 27.
+
 ## [0.3.3] — 2026-10-04
 
 ### Added
