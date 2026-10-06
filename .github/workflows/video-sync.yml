@@ -1,0 +1,48 @@
+name: video-sync
+
+# Integration tests of the video sync pipeline (tests/video-sync): builds
+# njclient for the host, boots a NINJAM server from ninjamzap-server in Docker
+# and runs the Catch2 scenarios against it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  video-sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out ninjamzap-server
+        uses: actions/checkout@v4
+        with:
+          repository: jacinside/ninjamzap-server
+          path: ninjamzap-server
+
+      - name: Build server image
+        run: docker build -t ninjamzap-server-test:latest ninjamzap-server
+
+      - name: Install build dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang make libvorbis-dev libogg-dev
+
+      - name: Build tests
+        working-directory: tests/video-sync
+        run: make -j"$(nproc)"
+
+      - name: Run scenarios
+        working-directory: tests/video-sync
+        run: ./run-ci.sh --reporter console --reporter junit::out=video-sync-junit.xml
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-sync-results
+          path: |
+            tests/video-sync/video-sync-junit.xml
+            tests/video-sync/*.log
+          if-no-files-found: ignore

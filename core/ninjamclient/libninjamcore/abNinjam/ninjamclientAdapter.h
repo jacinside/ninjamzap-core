@@ -104,6 +104,7 @@ public:
     // Channel management
     void removeLocalChannel(int channelIndex);
     void setLocalChannelMonitoring(int index, float volume, float pan, bool mute, bool solo);
+    void setLocalChannelSendGain(int index, float gain);
     void SetLocalChannelInfo(int index, const char* name, bool setsrcch, int srcch, bool setxmit, bool xmit, bool setflags, int flags);
     // Vorbis encoder bitrate for the local channel. NJClient maps bitrate → qv
     // internally (njclient.cpp:74-97). Triggers encoder rebuild on next process_samples
@@ -152,6 +153,43 @@ public:
         float* outBufferRight,
         float* outBufferMetro,
         int numFrames);
+
+    // N inputs → N outputs. Like processAudioN() but the output is a set of
+    // `outnch` deinterleaved channels instead of fixed stereo + metronome, so
+    // remote channels (SetUserChannelState setoutch), local monitors
+    // (SetLocalChannelInfo setoutch) and the metronome (setMetronomeChannel)
+    // land on whichever output channel/pair they are routed to. The caller
+    // decides the layout, e.g. hardware outputs 0..H-1 plus the metronome on
+    // its own channel H for click-free recording.
+    void processAudioOutN(
+        float** inChannels,
+        int innch,
+        float** outChannels,
+        int outnch,
+        int numFrames);
+
+    // Max input / output channels processAudioN / processAudioOutN accept.
+    static const int kMaxIOChannels = 64;
+
+    // Local channels the server lets this user transmit (its `maxchan`, known
+    // after the auth reply; NINJAM's default of 32 before that). Channels whose
+    // index reaches it are silently not sent — hosts should cap new channels.
+    int getMaxLocalChannels();
+
+    // Output (0-based first channel) the local channels' monitor lands on —
+    // the host's "master" output pair. Local channels have no per-channel
+    // output route, so this offset is all they need (NJClient adds it to each
+    // local channel's out index).
+    void setLocalChannelOffset(int offset);
+
+    // Session archive (the classic NINJAM / ReaNinjam session folder): from the
+    // next interval on, every remote and local interval is kept as
+    // <dir>/<0-f>/<guid>.ogg and indexed in <dir>/clipsort.log. `dir` must
+    // exist. Returns false if an archive is already running.
+    bool startSessionArchive(const char *dir);
+    // Stops saving and closes clipsort.log with its "end" line. Files of
+    // intervals in progress complete normally.
+    void stopSessionArchive();
 
     // Master volume controls
     void setMasterVolume(float volume, float pan, bool mute);
@@ -215,6 +253,7 @@ public:
 
 
 private:
+    int archivePrevSaveMode = -1;
     // Clock sync variables
     double lastSyncTime = 0.0;
     double intervalStartTime = 0.0;
@@ -273,6 +312,10 @@ private:
     // so the legacy paths are untouched. Allocated once in setAudioConfig().
     float** inputBufferN;
     int     inputBufferNCount;
+    // Output staging for processAudioOutN() (kMaxIOChannels + 1 so a caller
+    // can place the metronome after a full set of hardware outputs).
+    float** outputBufferN;
+    int     outputBufferNCount;
     
     // Metronome settings
     bool metronomeEnabled;

@@ -15,6 +15,83 @@ minor releases — once it stabilizes the project moves to `1.0.0`):
 - **PATCH** — receiver/sender bug fixes that do not alter the wire format
   or spec.
 
+## [0.3.5] — 2026-10-06
+
+### Added
+- `NJClient::SetLocalChannelSendGain(ch, gain)` (adapter `setLocalChannelSendGain`, iOS bridge
+  `NinjamClient_setLocalChannelSendGain`): a per-local-channel gain applied to the channel's own
+  copy of its source before broadcast and local monitoring (default 1). Several local channels
+  can now read the same input at independent levels — scaling the shared input buffer made
+  their levels move together. Wire format unchanged.
+
+## [0.3.4] — 2026-10-05
+
+### Fixed
+- Interval GUIDs no longer collide between clients started in the same second.
+  The RNG was seeded with `time(NULL)` only (1 s resolution), so two processes
+  created in the same second drew the same GUID sequence and receivers, which
+  key downloads by GUID, mixed their streams. `NJClient` now also mixes in a
+  high-resolution clock, the process id and the instance address (non-Windows).
+  Wire format unchanged. New test: scenario 27.
+
+## [0.3.3] — 2026-10-04
+
+### Added
+
+- **Local monitor output** — `NinjamClientAdapter::setLocalChannelOffset(offset)`
+  sets the first output channel the local channels' monitor is mixed into
+  (NJClient's local channel offset), so a host can send it to a "master"
+  output pair on multi-output interfaces. Default 0 (unchanged behavior).
+
+## [0.3.2] — 2026-10-02
+
+### Added
+
+- **Session archive** — `NinjamClientAdapter::startSessionArchive(dir)` /
+  `stopSessionArchive()` write the classic NINJAM / ReaNinjam session folder:
+  every remote and local interval kept as `<dir>/<0-f>/<guid>.OGG`, indexed in
+  `<dir>/clipsort.log` (closed with `end` on stop). Video channels are not
+  archived and keep flowing while archiving.
+
+## [0.3.1] — 2026-10-02
+
+### Added
+
+- **`NinjamClientAdapter::getMaxLocalChannels()`** — the number of local
+  channels the server lets this user transmit (its `maxchan`, known after the
+  auth reply). Channels whose index reaches it are silently not sent, so hosts
+  can cap how many local channels the user may add.
+
+## [0.3.0] — 2026-10-02
+
+### Added
+
+- **`processAudioOutN` — N inputs to N outputs.** Like `processAudioN` but the
+  output is a caller-defined set of `outnch` deinterleaved channels instead of
+  fixed stereo + metronome, so remote channels (`SetUserChannelState` with
+  `setoutch`), local monitors and the metronome (`setMetronomeChannel`) land on
+  whichever output channel or pair they are routed to. Typical layout: hardware
+  outputs `0..H-1` plus the metronome alone on channel `H` (click-free
+  recording, metronome placed by the host).
+
+### Changed
+
+- **Up to 64 input channels** in `processAudioN` / `processAudioOutN` (was 16) —
+  large interfaces and macOS aggregates expose 18–32+ channels. Exposed as
+  `NinjamClientAdapter::kMaxIOChannels`.
+
+## [0.2.3] — 2026-10-01
+
+### Fixed
+
+- **Video tagged with the translated channel index.** Since 0.2.2 the adapter
+  announces each local channel on a contiguous NINJAM `channel_idx`, but
+  `setVideoChannel` / `rawDataSendBegin` still passed the caller-facing id. A
+  sender with a second audio channel created before the camera announced its
+  video channel (flags `0x10`) on slot 2 while tagging the video chunks with
+  `chidx` 1, so receivers could not match the stream to its channel and showed
+  no video. Both calls now go through the same id → `channel_idx` translation.
+
 ## [0.2.2] — 2026-08-08
 
 ### Fixed

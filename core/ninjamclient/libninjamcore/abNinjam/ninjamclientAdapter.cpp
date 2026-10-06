@@ -1,5 +1,7 @@
 // ninjamclientAdapter.cpp
 #include "ninjamclientAdapter.h"
+#include <cstdio>
+#include <string>
 // include SumpleProfiler
 //#include "SimpleProfiler.h"
 
@@ -34,6 +36,8 @@ NinjamClientAdapter::NinjamClientAdapter()
     , metroOutputBuffer(nullptr)
     , inputBufferN(nullptr)
     , inputBufferNCount(0)
+    , outputBufferN(nullptr)
+    , outputBufferNCount(0)
     , metronomeEnabled(true)
     , metronomeVolume(0.5f)
     , metronomePan(0.0f)
@@ -74,6 +78,13 @@ NinjamClientAdapter::~NinjamClientAdapter() {
             delete[] inputBufferN[i];
         }
         delete[] inputBufferN;
+    }
+
+    if (outputBufferN) {
+        for (int i = 0; i < outputBufferNCount; i++) {
+            delete[] outputBufferN[i];
+        }
+        delete[] outputBufferN;
     }
 
     delete client;
@@ -305,13 +316,23 @@ void NinjamClientAdapter::setAudioConfig(int sampleRate, int channels) {
     }
 
     // Multi-channel input staging for processAudioN(). Fixed max-channel
-    // allocation done once — covers any USB interface channel count we
-    // realistically support (free tier 4, Pro up to 16). Freed in destructor.
+    // allocation done once — large interfaces and Mac aggregates expose 18–32+
+    // channels. Freed in destructor.
     if (!inputBufferN) {
-        inputBufferNCount = 16;
+        inputBufferNCount = kMaxIOChannels;
         inputBufferN = new float*[inputBufferNCount];
         for (int i = 0; i < inputBufferNCount; i++) {
             inputBufferN[i] = new float[8192];
+        }
+    }
+
+    // Output staging for processAudioOutN(): hardware outputs + one extra
+    // (e.g. the metronome on its own channel). Freed in destructor.
+    if (!outputBufferN) {
+        outputBufferNCount = kMaxIOChannels + 1;
+        outputBufferN = new float*[outputBufferNCount];
+        for (int i = 0; i < outputBufferNCount; i++) {
+            outputBufferN[i] = new float[8192];
         }
     }
 }
@@ -439,6 +460,11 @@ void NinjamClientAdapter::setLocalChannelMonitoring(int index, float volume, flo
     client->gsNjClient()->SetLocalChannelMonitoring(nj, true, volume, true, pan, true, mute, true, solo);
 }
 
+
+void NinjamClientAdapter::setLocalChannelSendGain(int index, float gain) {
+    int nj = njLocalIdx(index, false);
+    if (nj >= 0) client->gsNjClient()->SetLocalChannelSendGain(nj, gain);
+}
 
 int NinjamClientAdapter::njLocalIdx(int jsChannelId, bool createIfMissing) {
     auto it = localIdToNjIdx.find(jsChannelId);
@@ -651,6 +677,91 @@ void NinjamClientAdapter::processAudioN(
     if (outBufferLeft)  memcpy(outBufferLeft,  outputBuffer[0],   numFrames * sizeof(float));
     if (outBufferRight) memcpy(outBufferRight, outputBuffer[1],   numFrames * sizeof(float));
     if (outBufferMetro) memcpy(outBufferMetro, metroOutputBuffer, numFrames * sizeof(float));
+}
+
+void NinjamClientAdapter::processAudioOutN(
+    float** inChannels,
+    int innch,
+    float** outChannels,
+    int outnch,
+    int numFrames
+) {
+    this->numFrames = numFrames;
+    int nOut = outnch;
+    if (nOut > outputBufferNCount) nOut = outputBufferNCount;
+
+    if (!connected || numFrames <= 0 || nOut < 1 || !inputBufferN || !outputBufferN) {
+        for (int c = 0; c < outnch; c++) {
+            if (outChannels && outChannels[c]) memset(outChannels[c], 0, sizeof(float) * (numFrames > 0 ? numFrames : 0));
+        }
+        return;
+    }
+
+    // Stage inputs into owned buffers (same contract as processAudioN).
+    int n = innch;
+    if (n < 1) n = 1;
+    if (n > inputBufferNCount) n = inputBufferNCount;
+    for (int c = 0; c < n; c++) {
+        if (inChannels && inChannels[c]) {
+            memcpy(inputBufferN[c], inChannels[c], numFrames * sizeof(float));
+        } else {
+            memset(inputBufferN[c], 0, numFrames * sizeof(float));
+        }
+    }
+
+    // NJClient mixes into the output buffers — start from silence.
+    for (int c = 0; c < nOut; c++) {
+        memset(outputBufferN[c], 0, numFrames * sizeof(float));
+    }
+    client->audiostreamOnSamples(inputBufferN, n, outputBufferN, nOut, numFrames, sampleRate);
+
+    for (int c = 0; c < outnch; c++) {
+        if (!outChannels || !outChannels[c]) continue;
+        if (c < nOut) {
+            memcpy(outChannels[c], outputBufferN[c], numFrames * sizeof(float));
+        } else {
+            memset(outChannels[c], 0, numFrames * sizeof(float));
+        }
+    }
+}
+
+bool NinjamClientAdapter::startSessionArchive(const char *dir) {
+    if (!client || !dir || !*dir) return false;
+    NJClient *nj = client->gsNjClient();
+    if (nj->config_savelocalaudio > 0) return false; // already archiving
+    archivePrevSaveMode = nj->config_savelocalaudio;
+    // Order matters: the audio and network threads read the work dir only
+    // while config_savelocalaudio > 0, so set the dir and log first and turn
+    // saving on last.
+    nj->SetWorkDir(const_cast<char *>(dir));      // creates the 0..f subfolders
+    nj->SetLogFile(const_cast<char *>("clipsort.log"));
+    nj->config_savelocalaudio = 1;                 // keep every interval as .ogg
+    return true;
+}
+
+void NinjamClientAdapter::stopSessionArchive() {
+    if (!client) return;
+    NJClient *nj = client->gsNjClient();
+    if (nj->config_savelocalaudio <= 0) return;
+    // Saving off first; intervals already being written finish normally.
+    // The work dir is left as is (no other thread reads it while saving is off).
+    nj->config_savelocalaudio = archivePrevSaveMode;
+    nj->SetLogFile(nullptr);                        // closes clipsort.log
+    // NJClient only writes the closing "end" line from its destructor; add it
+    // so the folder is a complete session log like a disconnect leaves.
+    std::string log = std::string(nj->GetWorkDir()) + "clipsort.log";
+    if (FILE *f = fopen(log.c_str(), "a")) {
+        fputs("end\n", f);
+        fclose(f);
+    }
+}
+
+void NinjamClientAdapter::setLocalChannelOffset(int offset) {
+    if (client) client->gsNjClient()->SetLocalChannelOffset(offset < 0 ? 0 : offset);
+}
+
+int NinjamClientAdapter::getMaxLocalChannels() {
+    return client ? client->gsNjClient()->GetMaxLocalChannels() : 0;
 }
 
 void NinjamClientAdapter::setMasterVolume(float volume, float pan, bool mute) {
@@ -974,7 +1085,11 @@ void NinjamClientAdapter::setOnRawData(OnRawDataCallback callback) {
 
 void NinjamClientAdapter::rawDataSendBegin(unsigned char outGuid[16], unsigned int fourcc, int chidx, int estsize) {
     if (!connected || !client) return;
-    client->rawDataSendBegin(outGuid, fourcc, chidx, estsize);
+    // chidx is the caller-facing local channel id: tag the data with the same
+    // NINJAM channel_idx the channel was announced on (see njLocalIdx), or
+    // receivers can't match the stream to its channel.
+    int nj = njLocalIdx(chidx, false);
+    client->rawDataSendBegin(outGuid, fourcc, nj >= 0 ? nj : chidx, estsize);
 }
 
 void NinjamClientAdapter::rawDataSendWrite(const unsigned char guid[16], const void *data, int dataLen, bool isEnd) {
@@ -1004,7 +1119,8 @@ void NinjamClientAdapter::setVideoFrameReadyCallback(NJClient::VideoFrameReadyCa
 
 void NinjamClientAdapter::setVideoChannel(int chidx, unsigned int fourcc) {
     if (!client) return;
-    client->gsNjClient()->SetVideoChannel(chidx, fourcc);
+    // Same id → channel_idx translation as SetLocalChannelInfo.
+    client->gsNjClient()->SetVideoChannel(njLocalIdx(chidx, true), fourcc);
 }
 
 void NinjamClientAdapter::stopVideoChannel() {

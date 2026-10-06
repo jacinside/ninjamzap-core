@@ -1,6 +1,7 @@
 // SyncLogCapture — intercepts every SYNCLOG line emitted by njclient.cpp.
 //
-// On Apple builds njclient.cpp routes SYNCLOG through synclog_emit_oslog. We provide
+// njclient.cpp routes SYNCLOG through synclog_emit_oslog on Apple builds and when
+// NINJAMCORE_SYNCLOG_HOOK is defined (the Makefile sets it). We provide
 // that symbol from this translation unit, instead of LoggerBridge.mm. Lines are pushed
 // to a thread-safe ring + waiters. Tests query: hasLine(regex) / waitForLine(regex, timeout).
 #pragma once

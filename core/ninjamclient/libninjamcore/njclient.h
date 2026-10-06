@@ -162,6 +162,9 @@ public:
   void SetLocalChannelInfo(int ch, const char *name, bool setsrcch, int srcch, bool setbitrate, int bitrate, bool setbcast, bool broadcast, bool setoutch=false, int outch=0, bool setflags=false, int flags=0);
   char *GetLocalChannelInfo(int ch, int *srcch, int *bitrate, bool *broadcast, int *outch=0, int *flags=0);
   void SetLocalChannelMonitoring(int ch, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute, bool setsolo, bool solo);
+  // Gain applied to this local channel's source before it is broadcast and monitored
+  // (default 1). Lets several local channels read the same input at different levels.
+  void SetLocalChannelSendGain(int ch, float gain);
   int GetLocalChannelMonitoring(int ch, float *vol, float *pan, bool *mute, bool *solo); // 0 on success
   void NotifyServerOfChannelChange(); // call after any SetLocalChannel* that occur after initial connect
 
@@ -336,6 +339,7 @@ protected:
   WDL_PtrList<RawDataDownloadTracker> m_rawdata_downloads;
 
   WDL_HeapBuf tmpblock;
+  WDL_HeapBuf m_sendgain_buf; // per-local-channel send gain scratch (L|R)
 
   // Video channel state — interval BEGIN/END managed by on_new_interval()
   bool m_video_active;

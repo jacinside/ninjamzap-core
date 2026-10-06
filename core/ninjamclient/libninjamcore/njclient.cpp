@@ -27,6 +27,10 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <sys/time.h>
+#ifndef _WIN32
+#include <time.h>
+#include <unistd.h>
+#endif
 #include "njclient.h"
 
 // Monotonic-ish wall clock in milliseconds, for the voice-chat video delay line.
@@ -49,7 +53,9 @@ static double njc_now_ms() {
 #else
 #define SYNCLOG_ENABLED 0
 #endif
-#if SYNCLOG_ENABLED && defined(__APPLE__)
+// NINJAMCORE_SYNCLOG_HOOK routes SYNCLOG through synclog_emit_oslog on any
+// platform — the video-sync test harness provides it to capture events.
+#if SYNCLOG_ENABLED && (defined(__APPLE__) || defined(NINJAMCORE_SYNCLOG_HOOK))
 extern "C" void synclog_emit_oslog(const char *msg);
 #define SYNCLOG(...) do { char _b[512]; snprintf(_b,sizeof(_b),"[SYNCLOG] " __VA_ARGS__); synclog_emit_oslog(_b); } while(0)
 #elif SYNCLOG_ENABLED
@@ -436,6 +442,7 @@ public:
   int channel_idx;
 
   int src_channel; // 0 or 1 etc.. &1024 = stereo!
+  float send_gain; // applied to the source before broadcast + monitor (SetLocalChannelSendGain)
   int bitrate;
 
   float volume;
@@ -634,8 +641,21 @@ NJClient::NJClient()
   v=(DWORD)time(NULL);
   WDL_RNG_addentropy(&v,sizeof(v));
 #else
+  // time(NULL) alone (1 s resolution) made every client created in the same second
+  // generate the same interval GUID sequence; receivers key downloads by GUID, so two
+  // users joining in the same second had their streams mixed up (video of one lost).
+  // Mix in a high-resolution clock, the process id and this instance's address.
   time_t v=time(NULL);
   WDL_RNG_addentropy(&v,sizeof(v));
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  WDL_RNG_addentropy(&ts,sizeof(ts));
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  WDL_RNG_addentropy(&ts,sizeof(ts));
+  pid_t pid=getpid();
+  WDL_RNG_addentropy(&pid,sizeof(pid));
+  void *self=this;
+  WDL_RNG_addentropy(&self,sizeof(self));
 #endif
 
   config_autosubscribe=1;
@@ -2422,6 +2442,25 @@ void NJClient::process_samples(float **inbuf, int innch, float **outbuf, int out
       }
     }
 
+    // Per-channel send gain on a private copy: the input buffer may feed other local
+    // channels at their own level, so it must stay untouched.
+    if (src && lc->send_gain != 1.0f)
+    {
+      const float g = lc->send_gain;
+      const int bytelen = len*(int)sizeof(float);
+      if (m_sendgain_buf.GetSize() < bytelen*2) m_sendgain_buf.Resize(bytelen*2);
+      float *g1 = (float *)m_sendgain_buf.Get(), *g2 = g1 + len;
+      int i;
+      for (i = 0; i < len; i ++) g1[i] = src[i] * g;
+      if (src2 && src2 != src)
+      {
+        for (i = 0; i < len; i ++) g2[i] = src2[i] * g;
+        src2 = g2;
+      }
+      else if (src2) src2 = g1;
+      src = g1;
+    }
+
 
 #ifndef NJCLIENT_NO_XMIT_SUPPORT
     if (!justmonitor)
@@ -3735,6 +3774,16 @@ int NJClient::EnumLocalChannels(int i)
 }
 
 
+void NJClient::SetLocalChannelSendGain(int ch, float gain)
+{
+  if (!(gain >= 0.0f)) gain = 0.0f; // also catches NaN
+  m_locchan_cs.Enter();
+  int x;
+  for (x = 0; x < m_locchannels.GetSize() && m_locchannels.Get(x)->channel_idx!=ch; x ++);
+  if (x < m_locchannels.GetSize()) m_locchannels.Get(x)->send_gain = gain;
+  m_locchan_cs.Leave();
+}
+
 void NJClient::SetLocalChannelMonitoring(int ch, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute, bool setsolo, bool solo)
 {
   m_locchan_cs.Enter();
@@ -4087,7 +4136,7 @@ void RemoteDownload::Write(const void *buf, int len)
 }
 
 
-Local_Channel::Local_Channel() : channel_idx(0), src_channel(0), volume(1.0f), pan(0.0f), 
+Local_Channel::Local_Channel() : channel_idx(0), src_channel(0), send_gain(1.0f), volume(1.0f), pan(0.0f), 
                 muted(false), solo(false), broadcasting(false), 
 #ifndef NJCLIENT_NO_XMIT_SUPPORT
                 m_enc(NULL), 
