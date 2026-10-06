@@ -173,6 +173,13 @@ void NinjamClient_setLocalChannelState(NinjamClientRef* client, int32_t index, f
     }
 }
 
+void NinjamClient_setLocalChannelSendGain(NinjamClientRef* client, int32_t index, float gain) {
+    auto adapter = getAdapter(client);
+    if (adapter) {
+        adapter->setLocalChannelSendGain(index, gain);
+    }
+}
+
 // Volume controls
 void NinjamClient_setMasterVolume(NinjamClientRef* client, float volume, float pan, int32_t mute) {
     auto adapter = getAdapter(client);

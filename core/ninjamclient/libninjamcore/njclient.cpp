@@ -442,6 +442,7 @@ public:
   int channel_idx;
 
   int src_channel; // 0 or 1 etc.. &1024 = stereo!
+  float send_gain; // applied to the source before broadcast + monitor (SetLocalChannelSendGain)
   int bitrate;
 
   float volume;
@@ -2441,6 +2442,25 @@ void NJClient::process_samples(float **inbuf, int innch, float **outbuf, int out
       }
     }
 
+    // Per-channel send gain on a private copy: the input buffer may feed other local
+    // channels at their own level, so it must stay untouched.
+    if (src && lc->send_gain != 1.0f)
+    {
+      const float g = lc->send_gain;
+      const int bytelen = len*(int)sizeof(float);
+      if (m_sendgain_buf.GetSize() < bytelen*2) m_sendgain_buf.Resize(bytelen*2);
+      float *g1 = (float *)m_sendgain_buf.Get(), *g2 = g1 + len;
+      int i;
+      for (i = 0; i < len; i ++) g1[i] = src[i] * g;
+      if (src2 && src2 != src)
+      {
+        for (i = 0; i < len; i ++) g2[i] = src2[i] * g;
+        src2 = g2;
+      }
+      else if (src2) src2 = g1;
+      src = g1;
+    }
+
 
 #ifndef NJCLIENT_NO_XMIT_SUPPORT
     if (!justmonitor)
@@ -3754,6 +3774,16 @@ int NJClient::EnumLocalChannels(int i)
 }
 
 
+void NJClient::SetLocalChannelSendGain(int ch, float gain)
+{
+  if (!(gain >= 0.0f)) gain = 0.0f; // also catches NaN
+  m_locchan_cs.Enter();
+  int x;
+  for (x = 0; x < m_locchannels.GetSize() && m_locchannels.Get(x)->channel_idx!=ch; x ++);
+  if (x < m_locchannels.GetSize()) m_locchannels.Get(x)->send_gain = gain;
+  m_locchan_cs.Leave();
+}
+
 void NJClient::SetLocalChannelMonitoring(int ch, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute, bool setsolo, bool solo)
 {
   m_locchan_cs.Enter();
@@ -4106,7 +4136,7 @@ void RemoteDownload::Write(const void *buf, int len)
 }
 
 
-Local_Channel::Local_Channel() : channel_idx(0), src_channel(0), volume(1.0f), pan(0.0f), 
+Local_Channel::Local_Channel() : channel_idx(0), src_channel(0), send_gain(1.0f), volume(1.0f), pan(0.0f), 
                 muted(false), solo(false), broadcasting(false), 
 #ifndef NJCLIENT_NO_XMIT_SUPPORT
                 m_enc(NULL), 

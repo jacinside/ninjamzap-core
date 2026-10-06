@@ -461,6 +461,11 @@ void NinjamClientAdapter::setLocalChannelMonitoring(int index, float volume, flo
 }
 
 
+void NinjamClientAdapter::setLocalChannelSendGain(int index, float gain) {
+    int nj = njLocalIdx(index, false);
+    if (nj >= 0) client->gsNjClient()->SetLocalChannelSendGain(nj, gain);
+}
+
 int NinjamClientAdapter::njLocalIdx(int jsChannelId, bool createIfMissing) {
     auto it = localIdToNjIdx.find(jsChannelId);
     if (it != localIdToNjIdx.end()) return it->second;

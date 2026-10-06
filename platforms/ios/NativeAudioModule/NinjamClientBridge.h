@@ -85,6 +85,8 @@ void NinjamClient_setMetronomeChannel(NinjamClientRef* client, int32_t chidx);
 // Channel management
 void NinjamClient_removeLocalChannel(NinjamClientRef* client, int32_t channelIndex);
 void NinjamClient_setLocalChannelState(NinjamClientRef* client, int32_t index, float volume, float pan, int32_t mute, int32_t solo);
+// Gain applied to a local channel's source before broadcast + monitor (default 1).
+void NinjamClient_setLocalChannelSendGain(NinjamClientRef* client, int32_t index, float gain);
 const char* NinjamClient_getLocalChannelName(NinjamClientRef* client, int32_t channelIndex);
 void NinjamClient_setLocalChannelInfo(NinjamClientRef* client, int32_t channelIndex, const char* name, int32_t setsrcch, int32_t srcch, int32_t setxmit, int32_t xmit, int32_t setflags, int32_t flags);
 // Vorbis encoder bitrate for the local channel. Notifies server on change.

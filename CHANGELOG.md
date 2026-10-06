@@ -15,6 +15,15 @@ minor releases — once it stabilizes the project moves to `1.0.0`):
 - **PATCH** — receiver/sender bug fixes that do not alter the wire format
   or spec.
 
+## [0.3.5] — 2026-10-06
+
+### Added
+- `NJClient::SetLocalChannelSendGain(ch, gain)` (adapter `setLocalChannelSendGain`, iOS bridge
+  `NinjamClient_setLocalChannelSendGain`): a per-local-channel gain applied to the channel's own
+  copy of its source before broadcast and local monitoring (default 1). Several local channels
+  can now read the same input at independent levels — scaling the shared input buffer made
+  their levels move together. Wire format unchanged.
+
 ## [0.3.4] — 2026-10-05
 
 ### Fixed
