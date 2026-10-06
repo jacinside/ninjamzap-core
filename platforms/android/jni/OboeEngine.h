@@ -153,7 +153,13 @@ private:
     // Input preset — written from JS via setInputPreset(), read inside
     // openInputStream(). Defaults to VoicePerformance (low-latency mic path);
     // switched to Unprocessed when camera starts to disable HAL AGC/AEC/NS.
-    std::atomic<oboe::InputPreset> m_inputPreset{oboe::InputPreset::VoicePerformance};
+    // Unprocessed = flat input, the lowest-DSP capture path. This is the
+    // Android equivalent of the iOS session running in .measurement mode, and
+    // it is chosen for the same reason: VoicePerformance asks the HAL for voice
+    // processing, which colours the signal and, on iOS, was what made the audio
+    // swell and feed back once the camera opened (develop 28012e2). We record
+    // music, not voice calls.
+    std::atomic<oboe::InputPreset> m_inputPreset{oboe::InputPreset::Unprocessed};
 
     // Latency profile (connection-screen preset): 0=ultra_low, 1=low, 2=safe.
     // Single source of truth for buffer sizing — see profileParams(). Every

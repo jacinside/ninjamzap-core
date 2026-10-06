@@ -1010,6 +1010,18 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetInputPreset(
     eng->setInputPreset(static_cast<oboe::InputPreset>(preset));
 }
 
+// Per-local-channel send gain (the M button). 0 = the channel keeps
+// transmitting but sends silence; NJClient applies it to its private copy of
+// the source before the broadcast block, so the local monitor of that channel
+// goes quiet too — same as a DAW channel mute, and same as iOS.
+JNIEXPORT void JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetLocalChannelSendGain(
+    JNIEnv* env, jobject thiz, jlong clientPtr, jint channelIndex, jfloat gain) {
+    auto* client = reinterpret_cast<NinjamClientRef*>(clientPtr);
+    if (!client) return;
+    NinjamClient_setLocalChannelSendGain(client, static_cast<int32_t>(channelIndex), static_cast<float>(gain));
+}
+
 // What the HAL granted for the open streams, as JSON. Lets an instrumented
 // test assert on a real device what we can otherwise only read in a log line.
 JNIEXPORT jstring JNICALL
