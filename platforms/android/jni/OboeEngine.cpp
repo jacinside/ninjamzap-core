@@ -296,13 +296,23 @@ int32_t OboeEngine::getTunerGrowCount() const {
     return m_callback ? m_callback->getTunerGrowCount() : 0;
 }
 
+// Oboe's isMMapUsed() calls straight into libaaudio, which segfaults when the
+// stream is not an AAudio stream: on Android 8.0 (API 26) Oboe uses OpenSL ES
+// and the AAudio handle is null. Found by running the capability probe on a
+// Galaxy S7 (Android 8.0) — a null-pointer dereference inside
+// AAudioStream_isMMapUsed. Never ask for MMAP without this guard.
+static bool mmapUsed(oboe::AudioStream* s) {
+    if (!s || s->getAudioApi() != oboe::AudioApi::AAudio) return false;
+    return oboe::OboeExtensions::isMMapUsed(s);
+}
+
 std::string OboeEngine::getStreamCapabilitiesJson() const {
     if (!m_outputStream) return "{}";
     auto describe = [](oboe::AudioStream* s, const char* role, bool withSession) {
         std::ostringstream o;
         o << "\"" << role << "\":{"
           << "\"api\":\"" << oboe::convertToText(s->getAudioApi()) << "\","
-          << "\"mmap\":" << (oboe::OboeExtensions::isMMapUsed(s) ? "true" : "false") << ","
+          << "\"mmap\":" << (mmapUsed(s) ? "true" : "false") << ","
           << "\"sharing\":\"" << oboe::convertToText(s->getSharingMode()) << "\","
           << "\"perfMode\":\"" << oboe::convertToText(s->getPerformanceMode()) << "\","
           << "\"burst\":" << s->getFramesPerBurst() << ","
@@ -416,7 +426,7 @@ bool OboeEngine::openOutputStream() {
     LOGI("Output stream opened: requested deviceId=%d actual deviceId=%d api=%s mmap=%d sharing=%s perfMode=%s burst=%d bufSize start=%d actual=%d max=%d capacity=%d profile=%d bt=%d (dynamic, grows on xrun)",
          m_outputDeviceId.load(), m_outputStream->getDeviceId(),
          oboe::convertToText(m_outputStream->getAudioApi()),
-         oboe::OboeExtensions::isMMapUsed(m_outputStream.get()) ? 1 : 0,
+         mmapUsed(m_outputStream.get()) ? 1 : 0,
          oboe::convertToText(m_outputStream->getSharingMode()),
          oboe::convertToText(m_outputStream->getPerformanceMode()),
          outBurst, minOutBuf, actualOutBuf, maxOutBuf, capacity, m_latencyProfile.load(), btScale == 2 ? 1 : 0);
@@ -493,7 +503,7 @@ bool OboeEngine::openInputStream() {
     LOGI("Input stream opened: deviceId=%d api=%s mmap=%d sharing=%s perfMode=%s sessionId=%d burst=%d bufSize req=%d actual=%d profile=%d",
          m_inputStream->getDeviceId(),
          oboe::convertToText(m_inputStream->getAudioApi()),
-         oboe::OboeExtensions::isMMapUsed(m_inputStream.get()) ? 1 : 0,
+         mmapUsed(m_inputStream.get()) ? 1 : 0,
          oboe::convertToText(m_inputStream->getSharingMode()),
          oboe::convertToText(m_inputStream->getPerformanceMode()),
          static_cast<int>(m_inputStream->getSessionId()),
