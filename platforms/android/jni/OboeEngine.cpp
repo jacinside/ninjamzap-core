@@ -1,5 +1,6 @@
 #include "OboeEngine.h"
 #include <string>
+#include <sstream>
 #include <android/log.h>
 
 #define LOG_TAG "OboeEngine"
@@ -293,6 +294,39 @@ int32_t OboeEngine::getCallbackMaxMicros() const {
 
 int32_t OboeEngine::getTunerGrowCount() const {
     return m_callback ? m_callback->getTunerGrowCount() : 0;
+}
+
+std::string OboeEngine::getStreamCapabilitiesJson() const {
+    if (!m_outputStream) return "{}";
+    auto describe = [](oboe::AudioStream* s, const char* role, bool withSession) {
+        std::ostringstream o;
+        o << "\"" << role << "\":{"
+          << "\"api\":\"" << oboe::convertToText(s->getAudioApi()) << "\","
+          << "\"mmap\":" << (oboe::OboeExtensions::isMMapUsed(s) ? "true" : "false") << ","
+          << "\"sharing\":\"" << oboe::convertToText(s->getSharingMode()) << "\","
+          << "\"perfMode\":\"" << oboe::convertToText(s->getPerformanceMode()) << "\","
+          << "\"burst\":" << s->getFramesPerBurst() << ","
+          << "\"bufferSize\":" << s->getBufferSizeInFrames() << ","
+          << "\"capacity\":" << s->getBufferCapacityInFrames() << ","
+          << "\"sampleRate\":" << s->getSampleRate() << ","
+          << "\"channels\":" << s->getChannelCount();
+        if (withSession) o << ",\"sessionId\":" << static_cast<int>(s->getSessionId());
+        o << "}";
+        return o.str();
+    };
+    std::ostringstream j;
+    // requestedPerfMode is what WE ask for and is fully in our control; each
+    // stream's own perfMode is what the HAL granted and may be a downgrade on
+    // weak hardware. A test must assert the first and only record the second.
+    j << "{\"requestedPerfMode\":\"" << oboe::convertToText(m_performanceMode) << "\""
+      << ",\"profile\":" << m_latencyProfile.load()
+      << ",\"aecRequested\":" << (m_aecRequested.load() ? "true" : "false")
+      << ",\"outputBluetooth\":" << (m_outputBluetooth.load() ? "true" : "false")
+      << "," << describe(m_outputStream.get(), "output", false);
+    if (m_inputStream) j << "," << describe(m_inputStream.get(), "input", true);
+    else j << ",\"input\":null";
+    j << "}";
+    return j.str();
 }
 
 // ============================================================================

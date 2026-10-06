@@ -1010,6 +1010,16 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetInputPreset(
     eng->setInputPreset(static_cast<oboe::InputPreset>(preset));
 }
 
+// What the HAL granted for the open streams, as JSON. Lets an instrumented
+// test assert on a real device what we can otherwise only read in a log line.
+JNIEXPORT jstring JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamCapabilities(
+    JNIEnv* env, jobject thiz, jlong enginePtr) {
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return env->NewStringUTF("{}");
+    return env->NewStringUTF(eng->getStreamCapabilitiesJson().c_str());
+}
+
 // AEC toggle → the input only allocates a session ID when AEC is on
 // (a session ID disables MMAP capture). Reopens the streams when running.
 JNIEXPORT void JNICALL

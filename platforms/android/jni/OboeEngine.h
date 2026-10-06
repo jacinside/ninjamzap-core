@@ -6,6 +6,7 @@
 #include "NinjamClientBridge.h"
 #include "SessionRecorder.h"
 #include <memory>
+#include <string>
 #include <atomic>
 #include <mutex>
 
@@ -91,6 +92,14 @@ public:
     int32_t getInputShortReads() const;
     int32_t getCallbackMaxMicros() const;
     int32_t getTunerGrowCount() const;
+
+    // What the HAL actually GRANTED for the open streams, as JSON. These are
+    // the facts that decide whether our latency work pays off on a given
+    // device (AAudio vs OpenSL ES, MMAP, Exclusive vs Shared, LowLatency vs
+    // None, whether the input carries a session id). They used to exist only
+    // as a log line, which no test could assert on. Empty object when the
+    // engine is not running.
+    std::string getStreamCapabilitiesJson() const;
     int getLatencyProfile() const { return m_latencyProfile.load(); }
 
     // Forwarders to the callback's atomic flags / gains.
