@@ -26,6 +26,12 @@ Original NINJAM source:
 
 NINJAM is a revolutionary system for collaborative music-making over the internet. Musicians can jam in real-time, with the system handling network latency through synchronized intervals.
 
+The client core (`core/ninjamclient/libninjamcore/`: `njclient`, `mpb`, `netmsg`) started from
+upstream NINJAM commit `405036d2` (2025-06-01). The changes made here to those files are mirrored,
+with their original history, on the `ninjamzap/core` branch of
+https://github.com/jacinside/ninjam, a GitHub fork of the upstream repository, so they can be
+compared with and offered back to upstream.
+
 ---
 
 ## Derived from abNinjam
