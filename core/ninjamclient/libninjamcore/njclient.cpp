@@ -23,6 +23,7 @@
 */
 
 
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -908,11 +909,16 @@ void NJClient::AudioProc(float **inbuf, int innch, float **outbuf, int outnch, i
         v *= (double) srate;
 
         m_beatinfo_updated=0;
-        m_interval_length = (int)v;
-        //m_interval_length-=m_interval_length%1152;//hack
-        m_active_bpm=m_bpm;
-        m_active_bpi=m_bpi;
-        m_metronome_interval=(int) ((double)m_interval_length / (double)m_active_bpi);
+        // bpm/bpi come off the wire as uint16: large values give an interval
+        // that doesn't fit the sample count, so keep the previous beat info
+        if (v >= 1.0 && v <= (double)INT_MAX)
+        {
+          m_interval_length = (int)v;
+          //m_interval_length-=m_interval_length%1152;//hack
+          m_active_bpm=m_bpm;
+          m_active_bpi=m_bpi;
+          m_metronome_interval=(int) ((double)m_interval_length / (double)m_active_bpi);
+        }
       }
       m_misc_cs.Leave();
 
