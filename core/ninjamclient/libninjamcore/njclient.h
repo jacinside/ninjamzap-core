@@ -378,8 +378,11 @@ protected:
       int sz = src.data.GetSize();
       data.Resize(sz, false);
       if (sz > 0) memcpy(data.Get(), src.data.Get(), sz);
-      frameOffsets.Resize(src.frameCount, false);
-      if (src.frameCount > 0) memcpy(frameOffsets.Get(), src.frameOffsets.Get(), src.frameCount * sizeof(int));
+      // All offsets, including the in-progress frame's start (frameCount + 1 entries
+      // while pending_remaining > 0): copies happen mid-frame at interval swaps.
+      const int noffs = src.frameOffsets.GetSize();
+      frameOffsets.Resize(noffs, false);
+      if (noffs > 0) memcpy(frameOffsets.Get(), src.frameOffsets.Get(), noffs * sizeof(int));
       interval_seq = src.interval_seq;
       memcpy(audio_guid, src.audio_guid, 16);
       pending_remaining = src.pending_remaining;
