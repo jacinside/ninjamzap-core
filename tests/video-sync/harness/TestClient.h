@@ -90,6 +90,11 @@ public:
   // Format the receiver expects: [2B SPS len BE][SPS bytes][2B PPS len BE][PPS bytes].
   void sendFakeSPSPPS();
 
+  // Stall this client's audio clock for `ms`: AudioProc isn't called and the lost
+  // time isn't made up, so its interval boundaries move later relative to other
+  // clients. Same effect as a scheduling hiccup, or as clock drift between devices.
+  void stallAudio(int ms) { stallMs_.store(ms); }
+
   // Drains and returns recorded video frames from VideoFrameReady_Callback.
   std::vector<VideoFrameRecord> drainVideoFrames();
 
@@ -134,6 +139,7 @@ private:
   std::thread audioThread_;
   std::atomic<bool> stop_{false};
   std::atomic<bool> joined_{false};
+  std::atomic<int> stallMs_{0};
   std::atomic<bool> videoChannelRegistered_{false};
   std::atomic<int> currentSwap_{0};
   std::atomic<int> swapCallbackCount_{0};

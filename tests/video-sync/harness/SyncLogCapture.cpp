@@ -1,12 +1,21 @@
 #include "SyncLogCapture.h"
 
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace videosync {
 
 SyncLogCapture &SyncLogCapture::instance() {
   static SyncLogCapture inst;
+  static bool envChecked = false;
+  if (!envChecked) {
+    envChecked = true;
+    // NJ_TEST_SYNCLOG_ECHO=1 echoes every captured line, for chasing a flaky run.
+    const char *e = std::getenv("NJ_TEST_SYNCLOG_ECHO");
+    if (e && *e && *e != '0') inst.setEcho(true);
+  }
   return inst;
 }
 
@@ -31,7 +40,13 @@ void SyncLogCapture::push(const char *line) {
     while (lines_.size() > 8192) lines_.pop_front();
     echoNow = echo_;
   }
-  if (echoNow) std::fprintf(stderr, "%s\n", line);
+  if (echoNow) {
+    // milliseconds since the first captured line, to order events across threads
+    static const auto t0 = std::chrono::steady_clock::now();
+    long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - t0).count();
+    std::fprintf(stderr, "%8lld %s\n", ms, line);
+  }
   cv_.notify_all();
 }
 

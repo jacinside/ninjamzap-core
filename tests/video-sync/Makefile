@@ -36,8 +36,11 @@ INCLUDES := -I$(CORE) -I$(WDL) -I$(VENDOR) -I$(HARNESS) -I$(BREW_PREFIX)/include
 # DEBUG enables SYNCLOG in njclient.cpp (gated since the Release-build log
 # cleanup) — the harness asserts on SYNCLOG events via SyncLogCapture.
 DEFINES  := -DNINJAMCORE_HOST_BUILD=1 -DDEBUG=1 -DNINJAMCORE_SYNCLOG_HOOK=1 -D_DARWIN_C_SOURCE
-CXXFLAGS := $(CXXSTD) $(OPT) $(WARN) $(INCLUDES) $(DEFINES)
-CFLAGS   := $(OPT) $(WARN) $(INCLUDES) $(DEFINES)
+# -MMD -MP: each object also depends on the headers it includes (build/**/*.d),
+# so editing a header rebuilds every scenario and harness file that uses it.
+DEPFLAGS := -MMD -MP
+CXXFLAGS := $(CXXSTD) $(OPT) $(WARN) $(INCLUDES) $(DEFINES) $(DEPFLAGS)
+CFLAGS   := $(OPT) $(WARN) $(INCLUDES) $(DEFINES) $(DEPFLAGS)
 LDFLAGS  := -L$(BREW_PREFIX)/lib
 LIBS     := -lvorbis -lvorbisenc -logg -lpthread
 
@@ -113,6 +116,8 @@ $(CATCH_OBJ): $(VENDOR)/catch_amalgamated.cpp
 
 clean:
 	rm -rf $(BUILD) video_sync_tests
+
+-include $(ALL_OBJS:.o=.d)
 
 # Boots ninjamzap-server-test container, exports NJ_TEST_PORT, runs binary.
 # Catch2 arguments go in TEST_ARGS, e.g. make test TEST_ARGS='"[scenario8]"'.

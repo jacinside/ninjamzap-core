@@ -1,5 +1,7 @@
 #include "TestClient.h"
 
+#include <cstdlib>
+
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -269,7 +271,19 @@ void TestClient::audioThreadFn() {
   // fires approximately once per (BPI * 60 / BPM) seconds — same as production.
   auto period = std::chrono::microseconds((int)((double)block * 1e6 / (double)srate));
   auto next = std::chrono::steady_clock::now();
+  // NJ_TEST_STALL_CATCHUP=1: never drop late time; run blocks back-to-back until
+  // caught up, like the bot's wall-clock pump (RoomBot::RunAudioPump).
+  const char *cu = std::getenv("NJ_TEST_STALL_CATCHUP");
+  const bool catchup = cu && *cu == '1';
   while (!stop_.load()) {
+    int stall = stallMs_.exchange(0);
+    if (stall > 0) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(stall));
+      // Default: the stalled time is lost (a device whose clock slipped).
+      // NJ_TEST_STALL_CATCHUP=1: make it up with back-to-back blocks, like the
+      // bot's wall-clock pump after a CPU stall.
+      if (!catchup) next = std::chrono::steady_clock::now();
+    }
     if (joined_.load()) {
       client_->AudioProc(inbuf, 2, outbuf, 2, block, srate,
                          /*justmonitor*/ false, /*isPlaying*/ true,
@@ -278,7 +292,7 @@ void TestClient::audioThreadFn() {
     next += period;
     auto now = std::chrono::steady_clock::now();
     if (next > now) std::this_thread::sleep_until(next);
-    else next = now; // catch-up on slow steps without piling up
+    else if (!catchup) next = now; // catch-up on slow steps without piling up
   }
 }
 

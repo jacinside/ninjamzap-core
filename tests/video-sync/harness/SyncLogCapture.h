@@ -37,7 +37,8 @@ public:
   std::vector<std::string> all() const;
 
   // When echo is true, captured lines are also printed to stderr (default off
-  // to keep test output clean). Useful when debugging a flaky scenario.
+  // to keep test output clean; NJ_TEST_SYNCLOG_ECHO=1 turns it on for every
+  // scenario). Useful when debugging a flaky scenario.
   void setEcho(bool on);
 
   // Internal: called from the synclog_emit_oslog C symbol.
