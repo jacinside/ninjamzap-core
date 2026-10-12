@@ -411,6 +411,13 @@ protected:
     VideoRecvBuffer next;
     VideoRecvBuffer pending; // matched at SWAP N, moves to playing at SWAP N+1
     VideoRecvBuffer playing;
+    // Video whose audio is already in the receiver's queue (next_ds) but not yet
+    // playing: the audio runs more than one interval behind (an extra interval
+    // stays queued after a gap or a stalled audio clock). Held here, oldest first,
+    // until its audio becomes ds, then it takes the DS path. Same depth as the
+    // audio queue.
+    VideoRecvBuffer awaiting[2];
+    int awaiting_count;
     int frame_idx;
     int expected_frames;
     bool append_active;
@@ -431,7 +438,7 @@ protected:
     int  drop_resync_count;     // diagnostic: number of force-resyncs (HOLD cap exceeded)
     int  live_frame_idx;        // voice-chat (flags&2) live video: per-interval frame counter (reset on BEGIN) for frame-on-arrival delivery
     WDL_PtrList<LiveDelayFrame> live_delay_q; // voice-chat video delay line (~audio buffer depth) to align live video with audio
-    VideoRecvState() : frame_idx(0), expected_frames(0), append_active(false), append_to_next(false), append_to_pending(false), stream_chidx(0),
+    VideoRecvState() : awaiting_count(0), frame_idx(0), expected_frames(0), append_active(false), append_to_next(false), append_to_pending(false), stream_chidx(0),
                        empty_count(0), hold_count(0), synced(false), last_played_sender_seq(-1), drop_resync_count(0), live_frame_idx(0) {
       memset(append_guid, 0, 16); key[0] = 0; stream_username[0] = 0; memset(prev_ds_guid, 0, 16);
       memset(last_played_audio_guid, 0, 16);
@@ -441,6 +448,20 @@ protected:
 
   WDL_PtrList<VideoRecvState> m_video_streams;
   WDL_Mutex m_video_recv_cs;
+
+  // Each remote audio channel's queue (ds, next_ds[0], next_ds[1]) as of the last
+  // interval swap. Captured under m_users_cs in on_new_interval so video matching
+  // can read it inside m_video_recv_cs without taking m_users_cs there (the Run
+  // thread takes m_users_cs first, then m_video_recv_cs).
+  struct AudioQueueEntry {
+    char username[256];
+    unsigned char guid[3][16]; // [0]=ds (playing), [1]=next_ds[0], [2]=next_ds[1]
+    bool has[3];
+  };
+  WDL_TypedBuf<AudioQueueEntry> m_audio_queue;
+  // 0: the user's audio with this guid is playing; 1, 2: it is queued that many
+  // intervals ahead; -1: not in the queue.
+  int audioQueuePosition(const char *username, const unsigned char *guid) const;
 
   VideoRecvState *findVideoStream(const char *username, int chidx);
   VideoRecvState *findOrCreateVideoStream(const char *username, int chidx);

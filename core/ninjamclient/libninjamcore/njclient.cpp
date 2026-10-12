@@ -1384,6 +1384,8 @@ int NJClient::Run() // nonzero if sleep ok
                             vs->next.reset();
                             vs->pending.reset();
                             vs->accumulating.reset();
+                            for (int a = 0; a < 2; a++) vs->awaiting[a].reset();
+                            vs->awaiting_count = 0;
                           }
                         }
                         m_video_recv_cs.Leave();
@@ -1570,6 +1572,10 @@ int NJClient::Run() // nonzero if sleep ok
                       } else if (vs->accumulating.active && !memcmp(vs->accumulating.guid, diw.guid, 16)) {
                         target = &vs->accumulating;
                         targetIsAccumulating = true;
+                      } else {
+                        // Late WRITE for an interval waiting for its queued audio.
+                        for (int a = 0; a < vs->awaiting_count && !target; a++)
+                          if (!memcmp(vs->awaiting[a].guid, diw.guid, 16)) target = &vs->awaiting[a];
                       }
                       // else: unknown/stale download — drop WRITE
 
@@ -1684,7 +1690,12 @@ int NJClient::Run() // nonzero if sleep ok
                       if (vs) {
                         bool wasAppending = vs->append_active &&
                                             !memcmp(vs->append_guid, diw.guid, 16);
-                        if (wasAppending) {
+                        bool isAwaiting = false;
+                        for (int a = 0; a < vs->awaiting_count; a++)
+                          if (!memcmp(vs->awaiting[a].guid, diw.guid, 16)) isAwaiting = true;
+                        if (isAwaiting) {
+                          // complete; it stays in awaiting until its audio plays
+                        } else if (wasAppending) {
                           VideoRecvBuffer &target = vs->append_to_next ? vs->next : vs->playing;
                           vs->expected_frames = target.frameCount;
                           vs->append_active = false;
@@ -2267,9 +2278,23 @@ NJClient::VideoRecvState *NJClient::findVideoStreamByGUID(const unsigned char *g
     if (vs) {
       if (!memcmp(vs->accumulating.guid, guid, 16)) return vs;
       if (vs->append_active && !memcmp(vs->append_guid, guid, 16)) return vs;
+      for (int a = 0; a < vs->awaiting_count; a++)
+        if (!memcmp(vs->awaiting[a].guid, guid, 16)) return vs;
     }
   }
   return NULL;
+}
+
+int NJClient::audioQueuePosition(const char *username, const unsigned char *guid) const
+{
+  const AudioQueueEntry *e = m_audio_queue.Get();
+  for (int i = 0; i < m_audio_queue.GetSize(); i++)
+  {
+    if (strcmp(e[i].username, username)) continue;
+    for (int qi = 0; qi < 3; qi++)
+      if (e[i].has[qi] && !memcmp(e[i].guid[qi], guid, 16)) return qi;
+  }
+  return -1;
 }
 
 void NJClient::removeVideoStream(const char *username, int chidx)
@@ -2313,6 +2338,8 @@ void NJClient::ResetAllVideoSyncState()
     vs->next.reset();
     vs->pending.reset();
     vs->playing.reset();
+    for (int a = 0; a < 2; a++) vs->awaiting[a].reset();
+    vs->awaiting_count = 0;
     vs->frame_idx = 0;
     vs->expected_frames = 0;
     vs->append_active = false;
@@ -3157,6 +3184,7 @@ void NJClient::on_new_interval()
   m_locchan_cs.Leave();
 
   m_users_cs.Enter();
+  m_audio_queue.Resize(0,false);
   for (u = 0; u < m_remoteusers.GetSize(); u ++)
   {
     RemoteUser *user=m_remoteusers.Get(u);
@@ -3182,6 +3210,22 @@ void NJClient::on_new_interval()
         {
           chan->ds->applyOverlap(&fade_state);
           writeUserChanLog("",user,chan,ch);
+        }
+      }
+      if (!(chan->flags & 0x10) && (chan->ds || chan->next_ds[0] || chan->next_ds[1]))
+      {
+        int n = m_audio_queue.GetSize();
+        AudioQueueEntry *e = m_audio_queue.ResizeOK(n+1,false) ? m_audio_queue.Get()+n : NULL;
+        if (e)
+        {
+          lstrcpyn_safe(e->username, user->name.Get(), sizeof(e->username));
+          DecodeState *q[3] = { chan->ds, chan->next_ds[0], chan->next_ds[1] };
+          for (int qi = 0; qi < 3; qi ++)
+          {
+            e->has[qi] = q[qi] != NULL;
+            if (q[qi]) memcpy(e->guid[qi], q[qi]->guid, 16);
+            else memset(e->guid[qi], 0, 16);
+          }
         }
       }
     }
@@ -3281,6 +3325,37 @@ void NJClient::on_new_interval()
     vs->append_to_pending = false;
     memset(vs->append_guid, 0, 16);
 
+    // STAGE 1b: video that was waiting for queued audio (awaiting, oldest first).
+    // When its audio becomes ds it takes the DS path (pending, plays from the next
+    // swap); if its audio left the queue without playing, drop it.
+    while (vs->awaiting_count > 0) {
+      VideoRecvBuffer &aw = vs->awaiting[0];
+      const int pos = audioQueuePosition(vs->stream_username, aw.audio_guid);
+      if (pos > 0) break; // still queued: keep it, and everything behind it
+      if (pos == 0) {
+        SYNCLOG("SWAP#%d video PLAY: key=%s match=QUEUED vidSeq=%d frames=%d vid=%02x%02x (deferred → pending)",
+          m_sync_interval_cnt, vs->key, aw.sender_seq, aw.frameCount, aw.audio_guid[0], aw.audio_guid[1]);
+        vs->synced = true;
+        vs->last_played_sender_seq = aw.sender_seq;
+        memcpy(vs->last_played_audio_guid, aw.audio_guid, 16);
+        vs->pending.reset();
+        vs->pending.copyFrom(aw);
+        memcpy(vs->append_guid, vs->pending.guid, 16);
+        vs->append_active = true;
+        vs->append_to_next = false;
+        vs->append_to_pending = true;
+      } else {
+        SYNCLOG("SWAP#%d video AWAIT-DROP: key=%s vidSeq=%d vid=%02x%02x (its audio left the queue)",
+          m_sync_interval_cnt, vs->key, aw.sender_seq, aw.audio_guid[0], aw.audio_guid[1]);
+      }
+      for (int a = 1; a < vs->awaiting_count; a++) {
+        vs->awaiting[a-1].reset();
+        vs->awaiting[a-1].copyFrom(vs->awaiting[a]);
+      }
+      vs->awaiting[--vs->awaiting_count].reset();
+      if (pos == 0) break; // one audio interval starts per swap
+    }
+
     // Note: stale check on interval_seq was removed. Guid-based WRITE routing
     // already prevents stale data from polluting next. In burst scenarios
     // (e.g., user toggles video off/on), 2 BEGINs can arrive in the same
@@ -3354,10 +3429,32 @@ void NJClient::on_new_interval()
       // audio. Dropping a single video interval keeps every subsequent interval aligned.
       const int kHoldCapDrop = 4;
       int videoSenderSeq = vs->next.sender_seq;
+      // The audio for this video may be queued behind ds: the receiver's audio runs
+      // more than one interval late. Then the video has to wait for it too.
+      const int queuedPos = (audioHasData && hasGuid && !guidMatch) ?
+                            audioQueuePosition(vs->next.username, videoAudioGuid) : -1;
       if (!audioHasData) {
         vs->hold_count = 0;
         vs->empty_count = 0;
         SYNCLOG("SWAP#%d video HOLD: key=%s (no audio) vidSeq=%d", m_sync_interval_cnt, vs->key, videoSenderSeq);
+      } else if (queuedPos > 0) {
+        if (vs->awaiting_count == 2) {
+          SYNCLOG("SWAP#%d video AWAIT-DROP: key=%s vidSeq=%d (awaiting full)",
+            m_sync_interval_cnt, vs->key, vs->awaiting[0].sender_seq);
+          vs->awaiting[0].reset();
+          vs->awaiting[0].copyFrom(vs->awaiting[1]);
+          vs->awaiting[1].reset();
+          vs->awaiting_count = 1;
+        }
+        VideoRecvBuffer &slot = vs->awaiting[vs->awaiting_count++];
+        slot.reset();
+        slot.copyFrom(vs->next);
+        SYNCLOG("SWAP#%d video AWAIT: key=%s vidSeq=%d frames=%d vid=%02x%02x queuePos=%d",
+          m_sync_interval_cnt, vs->key, videoSenderSeq, vs->next.frameCount,
+          videoAudioGuid[0], videoAudioGuid[1], queuedPos);
+        vs->hold_count = 0;
+        vs->empty_count = 0;
+        vs->next.reset();
       } else if (hasGuid && !guidMatch) {
         vs->hold_count++;
         vs->empty_count = 0;
