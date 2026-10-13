@@ -14,7 +14,8 @@
 // pan/flags taken from past the end), and chat parse returned success with a parameter that is not
 // a C string. Those messages must be refused.
 //
-// Same fix as upstream NINJAM pull request #25 (justinfrankel/ninjam).
+// Same fix as upstream NINJAM pull request #25 (justinfrankel/ninjam), including
+// its follow-up for the userinfo_change_notify name loops.
 // No server needed.
 #include <cstring>
 #include <string>
@@ -53,6 +54,35 @@ TEST_CASE("29_mpb_parser_bounds — userinfo_change_notify pan is signed", "[sce
   CHECK(pan == -64);
   CHECK(std::string(user) == "alice");
   CHECK(std::string(chname) == "guitar");
+  delete m;
+}
+
+TEST_CASE("29_mpb_parser_bounds — userinfo_change_notify refuses unterminated names", "[scenario29]") {
+  // 6-byte record header (active, channel, volume x2, pan, flags), then the names.
+  // Before the fix these were refused too, but only after reading one byte past
+  // the end (not visible here: the message buffer has spare capacity); this pins
+  // the refusal for each missing terminator.
+  int active = 0, channel = 0, pan = 0, flags = 0;
+  short volume = 0;
+  const char *user = nullptr, *chname = nullptr;
+
+  const unsigned char noUserNul[] = {1, 0, 0, 0, 0, 0, 'a', 'b', 'c'};
+  Net_Message *m = rawMessage(MESSAGE_SERVER_USERINFO_CHANGE_NOTIFY, noUserNul, sizeof(noUserNul));
+  mpb_server_userinfo_change_notify in;
+  REQUIRE(in.parse(m) == 0);
+  CHECK(in.parse_get_rec(0, &active, &channel, &volume, &pan, &flags, &user, &chname) <= 0);
+  delete m;
+
+  const unsigned char noChanNul[] = {1, 0, 0, 0, 0, 0, 'a', 'b', 0, 'g', 't', 'r'};
+  m = rawMessage(MESSAGE_SERVER_USERINFO_CHANGE_NOTIFY, noChanNul, sizeof(noChanNul));
+  REQUIRE(in.parse(m) == 0);
+  CHECK(in.parse_get_rec(0, &active, &channel, &volume, &pan, &flags, &user, &chname) <= 0);
+  delete m;
+
+  const unsigned char noChan[] = {1, 0, 0, 0, 0, 0, 'a', 'b', 0};
+  m = rawMessage(MESSAGE_SERVER_USERINFO_CHANGE_NOTIFY, noChan, sizeof(noChan));
+  REQUIRE(in.parse(m) == 0);
+  CHECK(in.parse_get_rec(0, &active, &channel, &volume, &pan, &flags, &user, &chname) <= 0);
   delete m;
 }
 
