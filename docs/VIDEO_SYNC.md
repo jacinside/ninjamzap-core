@@ -217,9 +217,10 @@ flowchart TD
     hasaudio -- yes --> match{GUID matches?}
     match -- "matches prev_ds_guid" --> playprev[PLAY immediately<br/>covers SWAP..SWAP+1]
     match -- "matches ds" --> playds[DEFER 1 swap → pending<br/>PLAY at SWAP+1<br/>covers SWAP+1..SWAP+2]
-    match -- "no match" --> count{holdCount &lt; 3?}
+    match -- "matches audio still queued<br/>behind ds" --> await[AWAIT<br/>wait until that audio becomes ds,<br/>then take the DS path]
+    match -- "no match" --> count{holdCount &lt; 4?}
     count -- yes --> hold2[HOLD<br/>wait for audio to catch up]
-    count -- no --> fallback[PLAY-FALLBACK<br/>force, don't freeze forever]
+    count -- no --> drop[DROP-RESYNC<br/>drop this interval, realign<br/>on the next marker]
 ```
 
 **The adaptive defer — why both `PREV` and `DS` are handled, not just one:**
@@ -240,8 +241,41 @@ adapts:
 
 Either branch ends up perfectly synchronised — the receiver doesn't need to
 care which branch fired, only that the GUID matched something. The HOLD /
-FALLBACK ladder underneath absorbs transient network jitter without ever
-letting video freeze permanently.
+DROP-RESYNC ladder underneath absorbs transient network jitter: a video
+interval that never finds its audio is dropped after four swaps, and the next
+marker re-establishes alignment. One missed interval is better than video that
+runs ahead of the audio for the rest of the session.
+
+### Audio queued behind `ds` (AWAIT)
+
+`PREV` and `DS` assume the receiver's audio runs one interval behind the
+sender, which is the normal case. It can fall further behind and **stay**
+there: when the receiver's audio clock stalls for more than an interval (the
+app freezes for a moment, the audio engine restarts, the output device
+changes), the intervals that arrived meanwhile stay queued in the decoder
+(`next_ds`), and from then on every interval plays one swap later. Each video
+marker then names audio that is queued, not playing.
+
+Matching only `ds` and `prev_ds_guid` turns that into permanent video loss: no
+match → HOLD, the next BEGIN replaces the held interval, DROP-RESYNC after four,
+and again on every interval for as long as the extra audio interval stays
+queued.
+
+So the receiver also checks the queued audio intervals. A video interval whose
+marker matches one of them moves to an **awaiting** slot (as many slots as the
+audio queue is deep — two in the reference client). At each swap, an awaiting
+interval whose audio has just become `ds` takes the normal `DS` path (staged in
+`pending`, plays on the next swap); one whose audio left the queue without
+playing is dropped. Two details matter:
+
+- **Late chunks.** Frames of an awaiting interval keep arriving after it moved
+  out of `next`. Route incoming chunks by GUID to the awaiting slot before any
+  "currently accumulating" buffer — otherwise the tail of each interval is lost
+  (the reference client delivered ~55% of the frames before fixing this, ~88%
+  after).
+- **Locking.** Read the audio queue from a snapshot taken when the audio swaps,
+  not by locking the audio state from the video path: the network thread takes
+  the audio and video locks in the opposite order.
 
 ---
 
@@ -471,6 +505,14 @@ GUID before applying the outer-length parser.
   reference receiver, which feeds the chunk payload directly into a
   decoder configured for 4-byte AVCC length prefixes. Some encoder
   front-ends strip the per-NAL lengths during packaging — keep them.
+- **Receiver: the audio can run more than one interval behind.** Match the
+  marker against the queued audio intervals too, not only the playing (`ds`)
+  and previous ones; see "Audio queued behind `ds`" in §6. Without it, a
+  one-off stall on the receiver ends its video for good.
+- **Receiver: copying a buffer mid-frame.** A receive buffer holds one more
+  frame offset than complete frames while a frame is still arriving. Copy all
+  the offsets when moving a buffer between slots, or the next frame is read
+  from the wrong place.
 - **Receiver: do not hardcode the audio channel index when matching the
   video marker's audio GUID.** A sender may place audio on channels 2/3
   and reserve channel 1 for video to keep concerns separated; the audio
@@ -493,6 +535,6 @@ GUID before applying the outer-length parser.
 | Adapter passthrough (`setVideoChannel`, `queueVideoFrame`, …) | `core/ninjamclient/libninjamcore/abNinjam/ninjamclientAdapter.cpp` / `.h` |
 | iOS C bridge | `platforms/ios/NativeAudioModule/NinjamClientBridge.cpp` / `.h` |
 | Camera capture, H.264 encode/decode, playback pacing | Platform app code — *not in this repo* |
-| End-to-end sync tests (26 Catch2 scenarios, Docker NINJAM server) | `tests/video-sync/` |
+| End-to-end sync tests (Catch2 scenarios against a NINJAM server in Docker) | `tests/video-sync/` |
 
 *This repository is GPL v2, matching upstream Cockos NINJAM.*

@@ -74,6 +74,10 @@ For the full technical reference — sync marker, GUID matching, adaptive
 DS/PREV defer, threading model, wire format, and approaches that were
 tried and rejected — see [`docs/VIDEO_SYNC.md`](docs/VIDEO_SYNC.md).
 
+To add video to another client or server — which branch or document fits
+each case, and how to test interoperability — see
+[`docs/ADOPTING.md`](docs/ADOPTING.md).
+
 ---
 
 ## Credits
