@@ -1569,13 +1569,16 @@ int NJClient::Run() // nonzero if sleep ok
                         vs->append_active = true;
                         vs->append_to_next = false;
                         vs->append_to_pending = true;
-                      } else if (vs->accumulating.active && !memcmp(vs->accumulating.guid, diw.guid, 16)) {
-                        target = &vs->accumulating;
-                        targetIsAccumulating = true;
                       } else {
-                        // Late WRITE for an interval waiting for its queued audio.
+                        // Late WRITE for an interval waiting for its queued audio. Checked
+                        // before accumulating, which keeps that interval's guid after
+                        // startPlaying moved its data on.
                         for (int a = 0; a < vs->awaiting_count && !target; a++)
                           if (!memcmp(vs->awaiting[a].guid, diw.guid, 16)) target = &vs->awaiting[a];
+                        if (!target && vs->accumulating.active && !memcmp(vs->accumulating.guid, diw.guid, 16)) {
+                          target = &vs->accumulating;
+                          targetIsAccumulating = true;
+                        }
                       }
                       // else: unknown/stale download — drop WRITE
 

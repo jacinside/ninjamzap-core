@@ -55,6 +55,7 @@ TEST_CASE("32_audio_queued_behind — video survives the receiver's audio fallin
   // BPM 240 / BPI 4: 1 s intervals. Stream video throughout; after ~3 intervals
   // stall the receiver's audio clock for 1.5 intervals.
   uint32_t seq = 0;
+  uint32_t pushedAfterStall = 0;
   bool stalled = false;
   auto stallAt = std::chrono::steady_clock::now() + 3s;
   auto end = std::chrono::steady_clock::now() + 11s;
@@ -62,8 +63,10 @@ TEST_CASE("32_audio_queued_behind — video survives the receiver's audio fallin
     auto f = videosync::makeFakeFrame(seq, seq / 10, 256);
     sender.sendVideoFrame(f.data(), (int)f.size());
     ++seq;
+    if (stalled) ++pushedAfterStall;
     if (!stalled && std::chrono::steady_clock::now() >= stallAt) {
       log.clear(); // count only what happens from the stall on
+      receiver.drainVideoFrames();
       receiver.stallAudio(1500);
       stalled = true;
     }
@@ -74,12 +77,22 @@ TEST_CASE("32_audio_queued_behind — video survives the receiver's audio fallin
   auto queued = log.match(R"(SWAP#\d+ audio: user=qb_sender ch=0 ds=Y nds0=Y)");
   auto plays = log.match(R"(SWAP#\d+ video PLAY: key=qb_sender:1)");
   auto drops = log.match(R"(SWAP#\d+ video DROP-RESYNC: key=qb_sender:1)");
-  std::fprintf(stderr, "[scenario32] after stall: queuedAudioSwaps=%zu PLAY=%zu DROP-RESYNC=%zu\n",
-               queued.size(), plays.size(), drops.size());
+  int delivered = 0;
+  for (const auto &r : receiver.drainVideoFrames()) {
+    videosync::FakeFramePayload p;
+    if (videosync::parseFakeFrame(r.data.data(), (int)r.data.size(), p)) ++delivered;
+  }
+  std::fprintf(stderr, "[scenario32] after stall: queuedAudioSwaps=%zu PLAY=%zu DROP-RESYNC=%zu frames pushed=%u delivered=%d\n",
+               queued.size(), plays.size(), drops.size(), pushedAfterStall, delivered);
 
   // The stall must actually leave audio queued behind ds, or this tests nothing.
   REQUIRE(queued.size() >= 3);
   // ~8 intervals of video follow the stall; all but the first one or two must play.
   CHECK(plays.size() >= 5);
   CHECK(drops.empty());
+  // Whole intervals, not just their first frames: frames that arrive after the
+  // interval started waiting must reach it (when they didn't, only ~55% got
+  // through; whole intervals give ~88%). The margin covers the intervals lost
+  // around the stall and the last ones still in flight.
+  CHECK(delivered * 10 >= (int)pushedAfterStall * 7);
 }
