@@ -46,6 +46,7 @@ bool OboeEngine::start(int32_t sampleRate, int32_t framesPerBuffer) {
             ++m_stopGeneration;
         }
         m_running.store(false);
+        m_started.store(false);
         m_callback->setInputStream(nullptr);
         closeStreams();
     }
@@ -102,6 +103,7 @@ bool OboeEngine::start(int32_t sampleRate, int32_t framesPerBuffer) {
     }
 
     m_running.store(true);
+    m_started.store(true);
 
     // Start the recovery worker now that there is something to recover. It is
     // retired in stop(), which bumps the generation and joins it before
@@ -209,6 +211,17 @@ bool OboeEngine::recoverStreams(uint64_t generation) {
             const int32_t dwell = m_slowRecoveryMs.exchange(0, std::memory_order_relaxed);
             if (dwell > 0) std::this_thread::sleep_for(std::chrono::milliseconds(dwell));
 #endif
+#ifndef NDEBUG
+            int32_t forcedFailures = m_failNextReopens.load(std::memory_order_relaxed);
+            if (forcedFailures > 0) {
+                m_failNextReopens.store(forcedFailures - 1, std::memory_order_relaxed);
+                // Match what a real failure leaves behind: streams closed.
+                m_running.store(false);
+                m_callback->setInputStream(nullptr);
+                closeStreams();
+                reopened = false;
+            } else
+#endif
             reopened = reopenStreamsLocked();
             if (reopened && !stillWanted(generation)) {
                 // A stop landed while we were starting: undo it rather than
@@ -236,7 +249,10 @@ bool OboeEngine::recoverStreams(uint64_t generation) {
 }
 
 bool OboeEngine::retryRecoveryNow() {
-    if (!m_running.load()) return false;
+    // m_started, NOT m_running. A recovery that gave up left the streams
+    // closed and m_running false, which is the only state this is ever called
+    // from — checking m_running here refused every real retry.
+    if (!m_started.load()) return false;
     uint64_t generation;
     {
         std::lock_guard<std::mutex> lock(m_recoveryMutex);
@@ -268,6 +284,11 @@ void OboeEngine::stop() {
     if (m_recoveryThread.joinable()) m_recoveryThread.join();
 
     std::lock_guard<std::mutex> lock(m_streamMutex);
+    // BEFORE the early return. A recovery that gave up leaves m_running false
+    // while m_started is still true, so returning first would leave the
+    // session marked as wanting audio after it ended — and the next retry
+    // would act on an engine nobody is using any more.
+    m_started.store(false);
     if (!m_running.load()) return;
 
     LOGI("Stopping audio engine");

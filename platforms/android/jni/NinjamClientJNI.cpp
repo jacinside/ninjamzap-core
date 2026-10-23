@@ -1022,6 +1022,24 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamHealth(
 }
 
 /**
+ * Test seam, debug builds only: the next N reopen attempts fail, so a
+ * recovery can be made to give up. A no-op in release.
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeFailNextReopens(
+    JNIEnv* env, jobject thiz, jlong enginePtr, jint count) {
+#ifndef NDEBUG
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return JNI_FALSE;
+    eng->failNextReopensForTest(static_cast<int32_t>(count));
+    return JNI_TRUE;
+#else
+    (void)enginePtr; (void)count;
+    return JNI_FALSE;
+#endif
+}
+
+/**
  * Test seam, debug builds only: stretches the settle before a recovery
  * touches the hardware. A no-op in release.
  */

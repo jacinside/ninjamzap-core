@@ -232,6 +232,17 @@ public:
     void setSlowSettleForTest(int32_t ms) {
         m_slowSettleMs.store(ms, std::memory_order_relaxed);
     }
+
+    /**
+     * Test seam, debug builds only: the next [count] reopen attempts fail.
+     *
+     * Needed to reach the state a retry is for. Letting a recovery actually
+     * give up means failing every attempt, and a device that still works will
+     * not do that on request.
+     */
+    void failNextReopensForTest(int32_t count) {
+        m_failNextReopens.store(count, std::memory_order_relaxed);
+    }
 #endif
 
 
@@ -254,6 +265,17 @@ private:
 
     // State
     std::atomic<bool> m_running{false};
+
+    /**
+     * The session wants audio: true from a successful start until stop.
+     *
+     * Distinct from m_running, which means audio is ACTUALLY running right
+     * now. They part company exactly when it matters: a recovery that fails
+     * leaves the streams closed, so m_running is false while the session is
+     * still very much open and waiting. Gating a retry on m_running would
+     * refuse precisely in the state a retry exists for.
+     */
+    std::atomic<bool> m_started{false};
     int32_t m_sampleRate = 48000;
     int32_t m_framesPerBuffer = 256;
     oboe::PerformanceMode m_performanceMode = oboe::PerformanceMode::LowLatency;
@@ -273,6 +295,7 @@ private:
     // prove stop() does not wait for the worker with that mutex held.
     std::atomic<int32_t> m_slowRecoveryMs{0};
     std::atomic<int32_t> m_slowSettleMs{0};
+    std::atomic<int32_t> m_failNextReopens{0};
 #endif
 
     // ---- automatic stream recovery -------------------------------------
