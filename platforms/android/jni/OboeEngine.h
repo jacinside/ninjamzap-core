@@ -144,6 +144,22 @@ public:
 
 #ifndef NDEBUG
     /**
+     * Test seam, debug builds only: the order the streams were last closed in.
+     *
+     * One nibble per close, shifted in as it happens: 1 = output, 2 = input.
+     * So 0x12 is output-then-input, which is the only correct order, and 0x21
+     * is the inverted one. 0 means nothing has been closed yet.
+     *
+     * Recorded rather than inferred from logs: the order is a real invariant
+     * (the callback runs on the output's thread and reads the input, so only
+     * closing the output joins it), and an invariant deserves something
+     * sturdier to check than the wording of a log line.
+     */
+    int32_t getCloseSequenceForTest() const {
+        return m_closeSequence.load(std::memory_order_relaxed);
+    }
+
+    /**
      * Test seam, debug builds only: raises the HAL's disconnect path without a
      * real device loss.
      *
@@ -189,6 +205,11 @@ private:
 
     // Serializes stream lifecycle (start / stop / live reopen on device change).
     std::mutex m_streamMutex;
+
+#ifndef NDEBUG
+    // See getCloseSequenceForTest. Debug only; nothing reads it in release.
+    std::atomic<int32_t> m_closeSequence{0};
+#endif
 
     // Input preset — written from JS via setInputPreset(), read inside
     // openInputStream(). Defaults to VoicePerformance (low-latency mic path);

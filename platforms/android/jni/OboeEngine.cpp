@@ -522,19 +522,44 @@ bool OboeEngine::openInputStream() {
 }
 
 void OboeEngine::closeStreams() {
-    if (m_inputStream) {
-        m_inputStream->requestStop();
-        m_inputStream->close();
-        m_inputStream.reset();
-    }
+#ifndef NDEBUG
+    m_closeSequence.store(0, std::memory_order_relaxed);
+    const auto recordClose = [this](int32_t marker) {
+        m_closeSequence.store((m_closeSequence.load(std::memory_order_relaxed) << 4) | marker,
+                              std::memory_order_relaxed);
+    };
+#else
+    const auto recordClose = [](int32_t) {};
+#endif
+    // OUTPUT FIRST. This order is load-bearing, not tidiness.
+    //
+    // The data callback runs on the output stream's thread and reads the INPUT
+    // stream synchronously from inside it. Closing the output is what joins
+    // that thread: once it returns, nobody can be inside the callback any
+    // more. Closing the input first left a read racing a close on the same
+    // stream, with the callback still being driven.
     if (m_outputStream) {
         // Detach the tuner before stopping so the audio thread can't touch it
         // after it is destroyed (stop/close wait for the callback to return).
         m_callback->setLatencyTuner(nullptr);
         m_outputStream->requestStop();
         m_outputStream->close();
+        LOGI("closeStreams: output closed");
+        recordClose(1);
         m_outputTuner.reset();
         m_outputStream.reset();
+    }
+
+    // The callback cannot run any more, so clear the input pointer it holds
+    // before the stream goes away: a later start must not find a stale one.
+    m_callback->setInputStream(nullptr);
+
+    if (m_inputStream) {
+        m_inputStream->requestStop();
+        m_inputStream->close();
+        LOGI("closeStreams: input closed");
+        recordClose(2);
+        m_inputStream.reset();
     }
 }
 

@@ -1018,6 +1018,23 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamHealth(
 }
 
 /**
+ * Test seam, debug builds only: the order the streams were last closed in.
+ * One nibble per close, 1 = output, 2 = input, so 0x12 is the correct order.
+ * Returns -1 in release, where nothing is recorded.
+ */
+JNIEXPORT jint JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetCloseSequence(
+    JNIEnv* env, jobject thiz, jlong enginePtr) {
+#ifndef NDEBUG
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    return eng ? static_cast<jint>(eng->getCloseSequenceForTest()) : -1;
+#else
+    (void)enginePtr;
+    return -1;
+#endif
+}
+
+/**
  * Test seam, debug builds only: raises the disconnect path without a device
  * loss. A no-op in release. Returns true when it actually ran.
  */
