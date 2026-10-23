@@ -998,7 +998,7 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamMetrics(
  * nativeGetStreamMetrics returns nothing once the engine stops running, which
  * is exactly the moment a loss is most interesting. Returns
  * [outputDisconnects, callbackCount, millisSinceLastCallback,
- *  inputDisconnects].
+ *  inputDisconnects, reopenCount, recoveryFailures].
  *
  * The last two are the ones that matter when a stream dies without saying so:
  * callbacks simply stop while the stream still reports itself open.
@@ -1007,16 +1007,70 @@ JNIEXPORT jintArray JNICALL
 Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamHealth(
     JNIEnv* env, jobject thiz, jlong enginePtr) {
     auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
-    jint values[4] = {0, 0, -1, 0};
+    jint values[6] = {0, 0, -1, 0, 0, 0};
     if (eng) {
         values[0] = static_cast<jint>(eng->getOutputDisconnects());
         values[1] = static_cast<jint>(eng->getCallbackCount());
         values[2] = static_cast<jint>(eng->getMillisSinceLastCallback());
         values[3] = static_cast<jint>(eng->getInputDisconnects());
+        values[4] = static_cast<jint>(eng->getReopenCount());
+        values[5] = static_cast<jint>(eng->getRecoveryFailures());
     }
-    jintArray arr = env->NewIntArray(4);
-    env->SetIntArrayRegion(arr, 0, 4, values);
+    jintArray arr = env->NewIntArray(6);
+    env->SetIntArrayRegion(arr, 0, 6, values);
     return arr;
+}
+
+/**
+ * Test seam, debug builds only: stretches the settle before a recovery
+ * touches the hardware. A no-op in release.
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetSlowSettle(
+    JNIEnv* env, jobject thiz, jlong enginePtr, jint millis) {
+#ifndef NDEBUG
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return JNI_FALSE;
+    eng->setSlowSettleForTest(static_cast<int32_t>(millis));
+    return JNI_TRUE;
+#else
+    (void)enginePtr; (void)millis;
+    return JNI_FALSE;
+#endif
+}
+
+/**
+ * Cheap poll for "did the streams get reopened under us?".
+ *
+ * Packed into one int — reopens in the high half, failures in the low — so the
+ * 200 ms loop that watches it allocates nothing. Callers compare it with the
+ * last value they saw; any change means the streams are new, and anything
+ * attached to the old ones has to be attached again.
+ */
+JNIEXPORT jint JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetRecoveryTick(
+    JNIEnv* env, jobject thiz, jlong enginePtr) {
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return 0;
+    return static_cast<jint>((eng->getReopenCount() << 16) | (eng->getRecoveryFailures() & 0xFFFF));
+}
+
+/**
+ * Test seam, debug builds only: makes the next recovery pass dwell while it
+ * holds the stream lock. A no-op in release.
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetSlowRecovery(
+    JNIEnv* env, jobject thiz, jlong enginePtr, jint millis) {
+#ifndef NDEBUG
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return JNI_FALSE;
+    eng->setSlowRecoveryForTest(static_cast<int32_t>(millis));
+    return JNI_TRUE;
+#else
+    (void)enginePtr; (void)millis;
+    return JNI_FALSE;
+#endif
 }
 
 /**

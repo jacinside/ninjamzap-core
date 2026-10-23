@@ -39,6 +39,12 @@ bool OboeEngine::start(int32_t sampleRate, int32_t framesPerBuffer) {
 
     if (m_running.load()) {
         LOGI("Engine already running, closing streams first");
+        // Same reason as stop(): a recovery pass in flight belongs to the
+        // session being replaced, and must not finish into this one.
+        {
+            std::lock_guard<std::mutex> rlock(m_recoveryMutex);
+            ++m_stopGeneration;
+        }
         m_running.store(false);
         m_callback->setInputStream(nullptr);
         closeStreams();
@@ -97,6 +103,17 @@ bool OboeEngine::start(int32_t sampleRate, int32_t framesPerBuffer) {
 
     m_running.store(true);
 
+    // Start the recovery worker now that there is something to recover. It is
+    // retired in stop(), which bumps the generation and joins it before
+    // touching the streams.
+    {
+        std::lock_guard<std::mutex> lock(m_recoveryMutex);
+        m_recoveryShutdown = false;
+    }
+    if (!m_recoveryThread.joinable()) {
+        m_recoveryThread = std::thread([this] { recoveryLoop(); });
+    }
+
     // Log actual negotiated parameters
     LOGI("Audio engine started successfully:");
     LOGI("  Output: %dHz, %d ch, %d frames, %s",
@@ -114,7 +131,130 @@ bool OboeEngine::start(int32_t sampleRate, int32_t framesPerBuffer) {
     return true;
 }
 
+namespace {
+// Matching the Apple path, which these numbers come from rather than being
+// picked fresh: three attempts, 300 ms between them, 200 ms to let the HAL
+// settle before touching the hardware again.
+constexpr int     kMaxAttempts  = 3;
+constexpr int64_t kBackoffMs    = 300;
+constexpr int64_t kSettleMs     = 200;
+// How often the worker looks for a loss. One tick of latency on something the
+// listener already heard as a dropout.
+constexpr int64_t kPollMs       = 200;
+}  // namespace
+
+bool OboeEngine::waitOrAbandon(int64_t ms, uint64_t generation) {
+    std::unique_lock<std::mutex> lock(m_recoveryMutex);
+    m_recoveryCv.wait_for(lock, std::chrono::milliseconds(ms),
+                          [this] { return m_recoveryShutdown; });
+    return !m_recoveryShutdown && m_stopGeneration == generation;
+}
+
+bool OboeEngine::stillWanted(uint64_t generation) {
+    std::lock_guard<std::mutex> lock(m_recoveryMutex);
+    return !m_recoveryShutdown && m_stopGeneration == generation;
+}
+
+void OboeEngine::recoveryLoop() {
+    int32_t seenOut = m_callback->getOutputDisconnects();
+    int32_t seenIn  = m_callback->getInputDisconnects();
+
+    for (;;) {
+        uint64_t generation;
+        {
+            std::unique_lock<std::mutex> lock(m_recoveryMutex);
+            m_recoveryCv.wait_for(lock, std::chrono::milliseconds(kPollMs),
+                                  [this] { return m_recoveryShutdown; });
+            if (m_recoveryShutdown) return;
+            generation = m_stopGeneration;
+        }
+
+        const int32_t nowOut = m_callback->getOutputDisconnects();
+        const int32_t nowIn  = m_callback->getInputDisconnects();
+        // While stopped, only keep the baseline current: a loss recorded when
+        // nothing is running is not something to recover from.
+        if (!m_running.load()) { seenOut = nowOut; seenIn = nowIn; continue; }
+        if (nowOut == seenOut && nowIn == seenIn) continue;
+
+        LOGI("stream loss detected (output %d->%d, input %d->%d) — recovering",
+             seenOut, nowOut, seenIn, nowIn);
+        seenOut = nowOut;
+        seenIn  = nowIn;
+        recoverStreams(generation);
+        // Anything that arrived during the pass shows up as another difference
+        // on the next tick, which is how repeated events coalesce into one
+        // recovery at a time instead of piling up.
+        seenOut = m_callback->getOutputDisconnects();
+        seenIn  = m_callback->getInputDisconnects();
+    }
+}
+
+bool OboeEngine::recoverStreams(uint64_t generation) {
+    if (!stillWanted(generation)) return false;
+    // Let the HAL finish with the device before asking for it again — but
+    // interruptibly, so leaving the room during the settle is not a wait for
+    // the rest of it.
+    int64_t settleMs = kSettleMs;
+#ifndef NDEBUG
+    settleMs += m_slowSettleMs.exchange(0, std::memory_order_relaxed);
+#endif
+    if (!waitOrAbandon(settleMs, generation)) return false;
+
+    for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+        bool reopened = false;
+        {
+            std::lock_guard<std::mutex> lock(m_streamMutex);
+            if (!stillWanted(generation)) return false;
+#ifndef NDEBUG
+            const int32_t dwell = m_slowRecoveryMs.exchange(0, std::memory_order_relaxed);
+            if (dwell > 0) std::this_thread::sleep_for(std::chrono::milliseconds(dwell));
+#endif
+            reopened = reopenStreamsLocked();
+            if (reopened && !stillWanted(generation)) {
+                // A stop landed while we were starting: undo it rather than
+                // leave audio running for a session the user already left.
+                LOGI("recovery completed after a stop — undoing it");
+                m_running.store(false);
+                m_callback->setInputStream(nullptr);
+                closeStreams();
+                return false;
+            }
+        }
+        if (reopened) {
+            m_reopenCount.fetch_add(1, std::memory_order_relaxed);
+            LOGI("stream recovery succeeded (attempt %d)", attempt);
+            return true;
+        }
+        LOGE("stream recovery failed (attempt %d/%d)", attempt, kMaxAttempts);
+        if (attempt < kMaxAttempts) {
+            if (!waitOrAbandon(kBackoffMs, generation)) return false;
+        }
+    }
+    m_recoveryFailures.fetch_add(1, std::memory_order_relaxed);
+    LOGE("stream recovery gave up after %d attempts — audio stays down", kMaxAttempts);
+    return false;
+}
+
 void OboeEngine::stop() {
+    // Retire the worker FIRST, and without m_streamMutex.
+    //
+    // The join is what matters here and it is load-bearing: without it, a pass
+    // finishing a moment later reopens the streams of a session the user has
+    // already left. Doing it outside the stream lock is a guard rather than a
+    // fix for a present deadlock — a worker that has been told to shut down
+    // never reaches for that lock again — but it keeps a future pass that
+    // would from wedging teardown.
+    //
+    // Bumping the generation is what makes a pass in flight abandon itself at
+    // its next check instead of finishing.
+    {
+        std::lock_guard<std::mutex> lock(m_recoveryMutex);
+        m_recoveryShutdown = true;
+        ++m_stopGeneration;
+    }
+    m_recoveryCv.notify_all();
+    if (m_recoveryThread.joinable()) m_recoveryThread.join();
+
     std::lock_guard<std::mutex> lock(m_streamMutex);
     if (!m_running.load()) return;
 

@@ -9,6 +9,8 @@
 #include <string>
 #include <atomic>
 #include <mutex>
+#include <condition_variable>
+#include <thread>
 
 /**
  * Manages Oboe audio streams for full-duplex NINJAM audio.
@@ -140,6 +142,12 @@ public:
         return m_callback ? m_callback->getInputDisconnects() : 0;
     }
 
+    /** Streams successfully reopened after a loss. */
+    int32_t getReopenCount() const { return m_reopenCount.load(std::memory_order_relaxed); }
+
+    /** Losses where every reopen attempt failed and the audio stayed gone. */
+    int32_t getRecoveryFailures() const { return m_recoveryFailures.load(std::memory_order_relaxed); }
+
     /**
      * How many audio callbacks have run, and how long since the last one.
      *
@@ -188,6 +196,31 @@ public:
     void simulateInputLossForTest() {
         if (m_callback) m_callback->simulateInputLossForTest();
     }
+
+    /**
+     * Test seam, debug builds only: makes the next recovery pass dwell for
+     * [ms] while it holds the stream lock, so a test can overlap a recovery
+     * with a teardown deliberately rather than by luck.
+     *
+     * Note what it does NOT demonstrate: inverting the lock order in stop()
+     * does not hang, because a worker that has been told to shut down never
+     * reaches for the stream lock again. Joining outside that lock is a guard
+     * against a future pass that would.
+     */
+    void setSlowRecoveryForTest(int32_t ms) {
+        m_slowRecoveryMs.store(ms, std::memory_order_relaxed);
+    }
+
+    /**
+     * Test seam, debug builds only: stretches the settle a recovery waits
+     * before touching the hardware. Lets a test prove that leaving the room
+     * during that wait returns at once rather than sitting out the rest of
+     * it — which is the difference between waiting on the condition variable
+     * and sleeping.
+     */
+    void setSlowSettleForTest(int32_t ms) {
+        m_slowSettleMs.store(ms, std::memory_order_relaxed);
+    }
 #endif
 
 
@@ -225,7 +258,52 @@ private:
 #ifndef NDEBUG
     // See getCloseSequenceForTest. Debug only; nothing reads it in release.
     std::atomic<int32_t> m_closeSequence{0};
+    // Makes one recovery pass dwell while holding m_streamMutex, so a test can
+    // prove stop() does not wait for the worker with that mutex held.
+    std::atomic<int32_t> m_slowRecoveryMs{0};
+    std::atomic<int32_t> m_slowSettleMs{0};
 #endif
+
+    // ---- automatic stream recovery -------------------------------------
+    //
+    // A lost stream is reopened by a thread of its own. Not from the audio
+    // callback (it may not block) and not from Oboe's error thread (it is
+    // detached, so anything it reaches has to outlive the engine, which the
+    // engine cannot promise).
+    //
+    // The worker does not hold a reference back to the engine's callback for
+    // notification; it wakes on a timer and compares the disconnect counters
+    // with what it last saw. That is a poll rather than a push, which costs up
+    // to one tick of latency on a loss the listener already heard as a
+    // dropout, and buys not having a pointer from the callback into the engine
+    // whose lifetime nothing guarantees.
+    //
+    // LOCK ORDER, the only one allowed: m_streamMutex, then m_recoveryMutex.
+    // stillWanted() takes the second while a pass holds the first. Nothing
+    // holds m_recoveryMutex while reaching for m_streamMutex, and in
+    // particular stop() releases it before joining.
+    std::thread m_recoveryThread;
+    std::mutex m_recoveryMutex;
+    std::condition_variable m_recoveryCv;
+    bool m_recoveryShutdown = false;    // guarded by m_recoveryMutex
+    uint64_t m_stopGeneration = 0;      // guarded by m_recoveryMutex
+    std::atomic<int32_t> m_reopenCount{0};
+    std::atomic<int32_t> m_recoveryFailures{0};
+
+    void recoveryLoop();
+    /** One recovery pass. Returns true when the streams are running again. */
+    bool recoverStreams(uint64_t generation);
+    /** False once the engine stopped, so a pass in flight abandons itself. */
+    bool stillWanted(uint64_t generation);
+    /**
+     * Waits [ms], or until the engine is told to stop, whichever comes first.
+     * Returns false when the pass should abandon itself.
+     *
+     * Every pause inside a recovery goes through here rather than sleeping:
+     * a plain sleep cannot be woken, so leaving the room during a settle or a
+     * backoff would block teardown for the rest of it.
+     */
+    bool waitOrAbandon(int64_t ms, uint64_t generation);
 
     // Input preset — written from JS via setInputPreset(), read inside
     // openInputStream(). Defaults to VoicePerformance (low-latency mic path);
