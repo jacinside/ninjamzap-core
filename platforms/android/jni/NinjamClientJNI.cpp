@@ -967,8 +967,10 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamMetrics(
     if (!eng || !eng->isRunning()) {
         return env->NewFloatArray(0);
     }
-    // [0..6] legacy layout; [7..12] stream health (see NativeAudioModule.getPerformanceMetrics).
-    float values[13] = {
+    // [0..6] legacy layout; [7..12] stream health; [13] disconnects;
+    // [14] ms since the last audio callback (-1 = never ran)
+    // (see NativeAudioModule.getPerformanceMetrics).
+    float values[15] = {
         static_cast<float>(eng->getOutputBurst()),
         static_cast<float>(eng->getOutputBufferSize()),
         static_cast<float>(eng->getInputBurst()),
@@ -982,10 +984,55 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamMetrics(
         static_cast<float>(eng->getCallbackMaxMicros()),
         static_cast<float>(eng->getTunerGrowCount()),
         static_cast<float>(eng->getLatencyProfile()),
+        static_cast<float>(eng->getOutputDisconnects()),
+        static_cast<float>(eng->getMillisSinceLastCallback()),
     };
-    jfloatArray arr = env->NewFloatArray(13);
-    env->SetFloatArrayRegion(arr, 0, 13, values);
+    jfloatArray arr = env->NewFloatArray(15);
+    env->SetFloatArrayRegion(arr, 0, 15, values);
     return arr;
+}
+
+/**
+ * Stream-health counters, readable whether or not the streams are still open.
+ *
+ * nativeGetStreamMetrics returns nothing once the engine stops running, which
+ * is exactly the moment a loss is most interesting. Returns
+ * [outputDisconnects, callbackCount, millisSinceLastCallback].
+ *
+ * The last two are the ones that matter when a stream dies without saying so:
+ * callbacks simply stop while the stream still reports itself open.
+ */
+JNIEXPORT jintArray JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamHealth(
+    JNIEnv* env, jobject thiz, jlong enginePtr) {
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    jint values[3] = {0, 0, -1};
+    if (eng) {
+        values[0] = static_cast<jint>(eng->getOutputDisconnects());
+        values[1] = static_cast<jint>(eng->getCallbackCount());
+        values[2] = static_cast<jint>(eng->getMillisSinceLastCallback());
+    }
+    jintArray arr = env->NewIntArray(3);
+    env->SetIntArrayRegion(arr, 0, 3, values);
+    return arr;
+}
+
+/**
+ * Test seam, debug builds only: raises the disconnect path without a device
+ * loss. A no-op in release. Returns true when it actually ran.
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSimulateStreamDisconnect(
+    JNIEnv* env, jobject thiz, jlong enginePtr) {
+#ifndef NDEBUG
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return JNI_FALSE;
+    eng->simulateDisconnectForTest();
+    return JNI_TRUE;
+#else
+    (void)enginePtr;
+    return JNI_FALSE;
+#endif
 }
 
 JNIEXPORT jint JNICALL

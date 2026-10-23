@@ -49,7 +49,7 @@ void NinjamOboeCallback::setClient(NinjamClientRef* client) {
 }
 
 void NinjamOboeCallback::setInputStream(oboe::AudioStream* inputStream) {
-    m_inputStream = inputStream;
+    m_inputStream.store(inputStream, std::memory_order_release);
 }
 
 void NinjamOboeCallback::setFXProcessor(AudioFXProcessor* fxProcessor) {
@@ -93,11 +93,12 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
     // reflects the actual send level (iOS parity per AppleAudioEngine.swift
     // line ~955 "Measure input level after send gain").
     int32_t readCount = 0;
-    if (m_inputStream) {
-        int32_t channelCount = m_inputStream->getChannelCount();
+    oboe::AudioStream* inStream = m_inputStream.load(std::memory_order_acquire);
+    if (inStream) {
+        int32_t channelCount = inStream->getChannelCount();
         if (channelCount == 1) {
             oboe::ResultWithValue<int32_t> result =
-                m_inputStream->read(m_inLeft, framesToProcess, 0);
+                inStream->read(m_inLeft, framesToProcess, 0);
             if (result.value() > 0) {
                 readCount = result.value();
                 memcpy(m_inRight, m_inLeft, readCount * sizeof(float));
@@ -105,7 +106,7 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
         } else if (channelCount == 2) {
             float interleavedInput[MAX_FRAMES * 2];
             oboe::ResultWithValue<int32_t> result =
-                m_inputStream->read(interleavedInput, framesToProcess, 0);
+                inStream->read(interleavedInput, framesToProcess, 0);
             if (result.value() > 0) {
                 readCount = result.value();
                 deinterleave(interleavedInput, m_inLeft, m_inRight, readCount);
@@ -113,7 +114,7 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
         }
     }
 
-    if (m_inputStream && readCount < framesToProcess) {
+    if (inStream && readCount < framesToProcess) {
         m_inputShortReads.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -238,11 +239,19 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
     }
 
     {
-        const auto us = static_cast<int32_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - cbStart).count());
+        const auto cbEnd = std::chrono::steady_clock::now();
+        const auto us = static_cast<int32_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(cbEnd - cbStart).count());
         if (us > m_callbackMaxMicros.load(std::memory_order_relaxed)) {
             m_callbackMaxMicros.store(us, std::memory_order_relaxed);
         }
+        // Liveness, off the same clock reading. A stream that stops being
+        // driven raises nothing; callbacks simply stop, and this is the trace.
+        m_callbackCount.fetch_add(1, std::memory_order_relaxed);
+        m_lastCallbackUptimeMs.store(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                cbEnd.time_since_epoch()).count(),
+            std::memory_order_relaxed);
     }
     return oboe::DataCallbackResult::Continue;
 }
@@ -253,8 +262,10 @@ void NinjamOboeCallback::onErrorBeforeClose(oboe::AudioStream* stream, oboe::Res
 
 void NinjamOboeCallback::onErrorAfterClose(oboe::AudioStream* stream, oboe::Result error) {
     LOGE("Oboe stream error after close: %s", oboe::convertToText(error));
-    // TODO: Notify Kotlin layer to restart the audio engine
-    // This is the equivalent of iOS AVAudioEngine configurationChangeNotification
+    // Called from Oboe's internalErrorCallback thread. Counting it is all this
+    // does: a disconnect that is only logged leaves the caller unable to tell
+    // a lost device from silence.
+    m_outputDisconnects.fetch_add(1, std::memory_order_relaxed);
 }
 
 void NinjamOboeCallback::getOutputPeaks(float* left, float* right) const {

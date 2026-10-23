@@ -1,4 +1,5 @@
 #include "OboeEngine.h"
+#include <chrono>
 #include <string>
 #include <sstream>
 #include <android/log.h>
@@ -13,6 +14,15 @@ OboeEngine::OboeEngine() {
     m_recorder = std::make_unique<SessionRecorder>();
     m_callback->setFXProcessor(m_fxProcessor.get());
     m_callback->setRecorder(m_recorder.get());
+}
+
+int64_t OboeEngine::getMillisSinceLastCallback() const {
+    if (!m_callback) return -1;
+    const int64_t last = m_callback->getLastCallbackUptimeMs();
+    if (last == 0) return -1;   // never ran
+    const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    return now - last;
 }
 
 OboeEngine::~OboeEngine() {

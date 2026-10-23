@@ -119,6 +119,46 @@ public:
     // no-ops on the Oboe path. Triggers a stream reopen when running.
     void setLatencyProfile(int profile);
 
+    /**
+     * How many times the HAL has reported the output stream disconnected,
+     * which is what losing the device it was opened on looks like. Exposed
+     * because a lost stream is otherwise indistinguishable from silence: with
+     * a counter, the condition can be raised and asserted on.
+     */
+    int32_t getOutputDisconnects() const {
+        return m_callback ? m_callback->getOutputDisconnects() : 0;
+    }
+
+    /**
+     * How many audio callbacks have run, and how long since the last one.
+     *
+     * The decisive pair. A stream can stop being driven while still reporting
+     * itself open and running, and with nothing raised on the error path — so
+     * "is audio alive?" cannot be answered by asking the stream. It is
+     * answered by whether callbacks are still arriving. A gap far larger than
+     * one buffer period, while the engine believes it is running, means the
+     * audio is gone.
+     */
+    int64_t getCallbackCount() const { return m_callback ? m_callback->getCallbackCount() : 0; }
+    int64_t getMillisSinceLastCallback() const;
+
+#ifndef NDEBUG
+    /**
+     * Test seam, debug builds only: raises the HAL's disconnect path without a
+     * real device loss.
+     *
+     * It exists because the condition is hard to produce on demand. An
+     * emulator will not give it: restarting the audio server there drops the
+     * stream onto a legacy path that restores itself, with callbacks never
+     * missing a beat. Only real hardware losing a real device raises it, and
+     * waiting for that is not a test.
+     */
+    void simulateDisconnectForTest() {
+        if (m_callback) m_callback->simulateDisconnectForTest(oboe::Result::ErrorDisconnected);
+    }
+#endif
+
+
 private:
     // Streams
     std::shared_ptr<oboe::AudioStream> m_outputStream;

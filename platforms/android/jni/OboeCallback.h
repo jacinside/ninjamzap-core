@@ -5,6 +5,7 @@
 #include "NinjamClientBridge.h"
 #include "AudioFXProcessor.h"
 #include "SessionRecorder.h"
+#include <atomic>
 
 /**
  * Oboe AudioStreamCallback for full-duplex audio processing.
@@ -26,6 +27,13 @@ public:
 
     // Set the NINJAM client to process audio through
     void setClient(NinjamClientRef* client);
+
+    int64_t getCallbackCount() const { return m_callbackCount.load(std::memory_order_relaxed); }
+    int64_t getLastCallbackUptimeMs() const { return m_lastCallbackUptimeMs.load(std::memory_order_relaxed); }
+    int32_t getOutputDisconnects() const { return m_outputDisconnects.load(std::memory_order_relaxed); }
+
+    /** Test seam: raises the disconnect path without a real device loss. */
+    void simulateDisconnectForTest(oboe::Result error) { onErrorAfterClose(nullptr, error); }
 
     // Set the FX processor for local input effects
     void setFXProcessor(AudioFXProcessor* fxProcessor);
@@ -67,7 +75,17 @@ private:
     NinjamClientRef* m_client = nullptr;
     AudioFXProcessor* m_fxProcessor = nullptr;
     SessionRecorder* m_recorder = nullptr;
-    oboe::AudioStream* m_inputStream = nullptr;
+    // Atomic so the reopen path's write and the audio thread's read are not a
+    // data race. It does NOT make the pointee's lifetime safe: this callback
+    // reads from the input stream while running on the output stream's thread.
+    // closeStreams() currently closes the input first, so that thread can be
+    // inside read() on a stream being closed. Reordering — output first, which
+    // joins this callback, then input — is required before streams are
+    // reopened automatically.
+    std::atomic<oboe::AudioStream*> m_inputStream{nullptr};
+
+    /** Disconnects reported by the HAL on the output stream. */
+    std::atomic<int32_t> m_outputDisconnects{0};
 
     // Intermediate buffers for deinterleaving stereo to L/R
     static constexpr int MAX_FRAMES = 2048;
@@ -111,6 +129,19 @@ private:
     // overrun / drift); the tail is zero-filled, so it is an audible glitch
     // on the mic path that AAudio's xrun counter does not always report.
     std::atomic<int32_t> m_inputShortReads{0};
+
+    /**
+     * Monotonic count of data callbacks, and when the last one ran.
+     *
+     * A stream can die without anyone saying so: the HAL stops driving the
+     * audio thread and the stream still reports itself as open and running.
+     * Nothing in the error path fires, so the only evidence is that callbacks
+     * stop happening. These two are that evidence, and the reason they are
+     * counted unconditionally rather than derived from the short-read counter,
+     * which only moves when the input underruns.
+     */
+    std::atomic<int64_t> m_callbackCount{0};
+    std::atomic<int64_t> m_lastCallbackUptimeMs{0};
     std::atomic<int32_t> m_callbackMaxMicros{0};
 
     // Peak tracking (atomic for cross-thread access)
