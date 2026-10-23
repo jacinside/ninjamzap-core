@@ -143,6 +143,17 @@ public:
 
   int HasUserInfoChanged() { if (m_userinfochange) { m_userinfochange=0; return 1; } return 0; }
   int GetNumUsers() { return m_remoteusers.GetSize(); }
+#ifdef NINJAMCORE_TEST_HOOKS
+  // Tests only (NINJAMCORE_TEST_HOOKS): at the next swap, hold remote `user`'s channel `ch` (its ds
+  // waits unplayed) for `swaps` swaps, through the same path as a channel
+  // rejoining the interval grid after voice chat.
+  void TestRequestIntervalHold(const char *user, int ch, int swaps)
+  {
+    m_users_cs.Enter();
+    m_test_hold_user.Set(user); m_test_hold_ch = ch; m_test_hold_swaps = swaps;
+    m_users_cs.Leave();
+  }
+#endif
   char *GetUserState(int idx, float *vol=0, float *pan=0, bool *mute=0);
   void SetUserState(int idx, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute);
 
@@ -263,6 +274,8 @@ protected:
   void updateBPMinfo(int bpm, int bpi);
   void process_samples(float **inbuf, int innch, float **outbuf, int outnch, int len, int srate, int offset, int justmonitor, bool isPlaying, bool isSeek, double cursessionpos);
   void on_new_interval();
+  void rejoinIntervalGrid(RemoteUser *user, int ch);
+  int holdIntervalChannel(RemoteUser_Channel *chan, int swaps);
   void writeUserChanLog(const char *lbl, RemoteUser *user, RemoteUser_Channel *chan, int chanidx);
 
   void writeLog(const char *fmt, ...);
@@ -282,6 +295,10 @@ protected:
 #endif
 
   WDL_String m_user, m_pass, m_host;
+#ifdef NINJAMCORE_TEST_HOOKS
+  WDL_String m_test_hold_user;
+  int m_test_hold_ch = -1, m_test_hold_swaps = 0;
+#endif
 
   int m_in_auth;
   int m_bpm,m_bpi;
@@ -369,8 +386,9 @@ protected:
     // is finalized (frameCount++ happens at completion, not on every WRITE).
     int pending_remaining;
     int sender_seq; // sender's m_sync_interval_cnt for this interval (from 24B marker, -1=unknown)
-    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), interval_seq(-1), active(false), pending_remaining(0), sender_seq(-1) { username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
-    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; interval_seq = -1; active = false; pending_remaining = 0; sender_seq = -1; username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
+    int total_frames; // frames in this interval once its download ended (0 = still arriving); paces it
+    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), interval_seq(-1), active(false), pending_remaining(0), sender_seq(-1), total_frames(0) { username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
+    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; interval_seq = -1; active = false; pending_remaining = 0; sender_seq = -1; total_frames = 0; username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
     void copyFrom(const VideoRecvBuffer &src) {
       fourcc = src.fourcc; chidx = src.chidx; active = src.active; frameCount = src.frameCount;
       memcpy(username, src.username, sizeof(username));
@@ -387,6 +405,7 @@ protected:
       memcpy(audio_guid, src.audio_guid, 16);
       pending_remaining = src.pending_remaining;
       sender_seq = src.sender_seq;
+      total_frames = src.total_frames;
     }
   };
 
@@ -457,6 +476,7 @@ protected:
     char username[256];
     unsigned char guid[3][16]; // [0]=ds (playing), [1]=next_ds[0], [2]=next_ds[1]
     bool has[3];
+    int hold; // swaps before ds starts (a channel rejoining the interval grid)
   };
   WDL_TypedBuf<AudioQueueEntry> m_audio_queue;
   // 0: the user's audio with this guid is playing; 1, 2: it is queued that many

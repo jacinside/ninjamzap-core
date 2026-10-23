@@ -182,7 +182,7 @@ class DecodeState
   public:
     DecodeState() : decode_fp(0), decode_buf(0), decode_codec(0), 
                                            resample_state(0.0),
-                                           is_voice_firstchk(false)
+                                           is_voice_firstchk(false), begin_ms(0.0)
     { 
       memset(guid,0,sizeof(guid));
     }
@@ -205,6 +205,7 @@ class DecodeState
     double resample_state;
 
     bool is_voice_firstchk;
+    double begin_ms; // when its download began (BEGIN arrived), njc_now_ms()
 
     void applyOverlap(overlapFadeState *s)
     {
@@ -326,6 +327,13 @@ class RemoteUser_Channel
     int dump_samples;
     DecodeState *ds;
     DecodeState *next_ds[2]; // prepared by main thread, for audio thread
+    // Queue restarted from empty (left voice chat, or subscribed again): its first
+    // interval must join the queue position of the user's other interval channels
+    // (rejoinIntervalGrid).
+    // 0 = no, 1 = pending, 2 = pending, waiting for a silent sibling (logged).
+    int rejoin_grid;
+    // Swaps that ds waits, unplayed, before it starts (set by rejoinIntervalGrid).
+    int hold_swaps;
 
     double decode_peak_vol[2];
 
@@ -390,6 +398,7 @@ public:
   int chidx;
   WDL_String username;
   int playtime;
+  double begin_ms;
 
 private:
   unsigned int m_fourcc;
@@ -978,7 +987,10 @@ void NJClient::AudioProc(float **inbuf, int innch, float **outbuf, int outnch, i
         }
 
         int readyFrames = vs->playing.active ? vs->playing.frameCount : 0;
-        int expected = vs->expected_frames > 0 ? vs->expected_frames : readyFrames;
+        // Pace by this interval's own frame count once its download ended; until
+        // then, by the last finished interval's count.
+        int expected = vs->playing.total_frames > 0 ? vs->playing.total_frames :
+                       vs->expected_frames > 0 ? vs->expected_frames : readyFrames;
 
         if (readyFrames > 0 && expected > 0)
         {
@@ -1320,6 +1332,10 @@ int NJClient::Run() // nonzero if sleep ok
 
                     if ((theuser->channels[cid].flags^f)&(2|4)) // if flags changed instamode, flush out the samples
                     {
+                      // Voice chat -> interval: the flush empties this channel's queue
+                      // while the user's other channels may hold an interval more.
+                      theuser->channels[cid].rejoin_grid = ((theuser->channels[cid].flags&2) && !(f&(2|4))) ? 1 : 0;
+                      theuser->channels[cid].hold_swaps = 0;
                       delete theuser->channels[cid].ds;
                       delete theuser->channels[cid].next_ds[0];
                       delete theuser->channels[cid].next_ds[1];
@@ -1366,6 +1382,8 @@ int NJClient::Run() // nonzero if sleep ok
                       theuser->channels[cid].ds=0;
                       theuser->channels[cid].next_ds[0]=0;
                       theuser->channels[cid].next_ds[1]=0;
+                      theuser->channels[cid].rejoin_grid=0;
+                      theuser->channels[cid].hold_swaps=0;
 //                      OutputDebugString("channel flags changed, flushing sources2\n");
 
                       if (!theuser->chanpresentmask) // user no longer exists, it seems
@@ -1455,7 +1473,8 @@ int NJClient::Run() // nonzero if sleep ok
                   VideoRecvState *vs = findOrCreateVideoStream(dib.username, dib.chidx);
                   // Stop appending if still active (previous download didn't get END)
                   if (vs->append_active) {
-                    VideoRecvBuffer &target = vs->append_to_next ? vs->next : vs->playing;
+                    VideoRecvBuffer &target = vs->append_to_pending ? vs->pending : vs->append_to_next ? vs->next : vs->playing;
+                    target.total_frames = target.frameCount;
                     vs->expected_frames = target.frameCount;
                     vs->append_active = false;
                     memset(vs->append_guid, 0, 16);
@@ -1701,11 +1720,16 @@ int NJClient::Run() // nonzero if sleep ok
                                             !memcmp(vs->append_guid, diw.guid, 16);
                         bool isAwaiting = false;
                         for (int a = 0; a < vs->awaiting_count; a++)
-                          if (!memcmp(vs->awaiting[a].guid, diw.guid, 16)) isAwaiting = true;
+                          if (!memcmp(vs->awaiting[a].guid, diw.guid, 16)) {
+                            isAwaiting = true;
+                            vs->awaiting[a].total_frames = vs->awaiting[a].frameCount;
+                            vs->expected_frames = vs->awaiting[a].frameCount;
+                          }
                         if (isAwaiting) {
                           // complete; it stays in awaiting until its audio plays
                         } else if (wasAppending) {
-                          VideoRecvBuffer &target = vs->append_to_next ? vs->next : vs->playing;
+                          VideoRecvBuffer &target = vs->append_to_pending ? vs->pending : vs->append_to_next ? vs->next : vs->playing;
+                          target.total_frames = target.frameCount;
                           vs->expected_frames = target.frameCount;
                           vs->append_active = false;
                           memset(vs->append_guid, 0, 16);
@@ -1714,6 +1738,7 @@ int NJClient::Run() // nonzero if sleep ok
                             vs->expected_frames = vs->accumulating.frameCount;
                             vs->next.reset();
                             vs->next.copyFrom(vs->accumulating);
+                            vs->next.total_frames = vs->next.frameCount;
                           }
                           vs->accumulating.reset();
                         }
@@ -2301,7 +2326,7 @@ int NJClient::audioQueuePosition(const char *username, const unsigned char *guid
   {
     if (strcmp(e[i].username, username)) continue;
     for (int qi = 0; qi < 3; qi++)
-      if (e[i].has[qi] && !memcmp(e[i].guid[qi], guid, 16)) return qi;
+      if (e[i].has[qi] && !memcmp(e[i].guid[qi], guid, 16)) return qi + e[i].hold;
   }
   return -1;
 }
@@ -2870,6 +2895,7 @@ void NJClient::mixInChannel(RemoteUser *user, int chanidx,
 
   int llmode=(userchan->flags&2);
   int sessionmode = !llmode && (userchan->flags&4);
+  if (userchan->hold_swaps > 0) return; // ds waits for the user's other channels
 
   overlapFadeState fade_state;
   if (sessionmode)
@@ -3158,6 +3184,88 @@ void NJClient::writeUserChanLog(const char *lbl, RemoteUser *user, RemoteUser_Ch
   writeLog("user %s \"%s\" %d%s \"%s\"\n",guidstr,tmp,ch,lbl,tmp2);
 }
 
+// Rejoining the interval grid after voice chat or a re-subscribe.
+// Turning voice chat off on a channel flushes its decode queue (flag change), and
+// subscribing to it again restarts it from empty, so its first interval lands at
+// the shallowest queue position. The user's other interval
+// channels keep their depth, which is one interval more after a stall (queued
+// intervals are never dropped). Without correction the channels play intervals
+// recorded at different times from then on, and the video, anchored to ch0's
+// interval GUID, matches only one of them.
+// When the channel first has an interval to play, the sibling interval whose
+// download began nearest to ours (BEGIN arrival time) gives the queue position ours
+// belongs at: that many swaps, ours stays in ds unplayed (holdIntervalChannel).
+// Called from on_new_interval after the swap, under m_users_cs.
+void NJClient::rejoinIntervalGrid(RemoteUser *user, int ch)
+{
+  RemoteUser_Channel *chan=&user->channels[ch];
+  if (chan->flags & (2|4)) { chan->rejoin_grid=0; return; }
+  if (!chan->ds) return; // nothing to place yet
+  const char *uname=user->name.Get(), *at=strchr(uname,'@');
+  const int unameLen = at ? (int)(at-uname) : (int)strlen(uname);
+  RemoteUser_Channel *ref=NULL;
+  bool siblingSilent=false;
+  for (int i = 0; i < MAX_USER_CHANNELS && !ref; i ++)
+  {
+    RemoteUser_Channel *c=&user->channels[i];
+    if (i == ch || (c->flags & (0x10|2|4)) || c->rejoin_grid || !(user->chanpresentmask & (1<<i))) continue;
+    if (c->ds && !c->hold_swaps) ref=c;
+    else siblingSilent=true;
+  }
+  if (!ref)
+  {
+    if (!siblingSilent) { chan->rejoin_grid=0; return; } // no interval sibling to follow
+    // The sibling plays nothing this swap: retry at the next one. Until then this
+    // channel may play off the sibling's grid.
+    if (chan->rejoin_grid == 1)
+      SYNCLOG("audio REJOIN-WAIT: user=%.*s ch=%d (sibling silent, not aligned yet)", unameLen, uname, ch);
+    chan->rejoin_grid=2;
+    return;
+  }
+  // Queue position the sibling has, or will have, for the interval that began with
+  // ours (0 = playing now). Take the sibling interval whose BEGIN is nearest ours:
+  // it began k intervals after ours, so ours belongs k positions before it. This
+  // holds when the sibling's own interval hasn't arrived yet (k < 0) or was lost
+  // from its queue (k > 0).
+  DecodeState *q[3]={ref->ds,ref->next_ds[0],ref->next_ds[1]};
+  const double intervalMs = m_srate > 0 ? 1000.0 * m_interval_length / m_srate : 0.0;
+  int near=-1;
+  double nearD=0.0;
+  for (int i = 0; i < 3; i ++)
+  {
+    if (!q[i]) continue;
+    const double d=q[i]->begin_ms - chan->ds->begin_ms;
+    if (near < 0 || fabs(d) < fabs(nearD)) { near=i; nearD=d; }
+  }
+  const int k = intervalMs > 0.0 ? (int)floor(nearD / intervalMs + 0.5) : 0;
+  int pos = near - k;
+  if (pos < 0)
+  {
+    // the sibling is already past ours: holding can't help, leave it
+    SYNCLOG("audio REJOIN-BEHIND: user=%.*s ch=%d siblingPos=%d", unameLen, uname, ch, pos);
+    pos = 0;
+  }
+  chan->rejoin_grid=0;
+  const int held = holdIntervalChannel(chan, pos);
+  SYNCLOG("audio REJOIN: user=%.*s ch=%d wanted=%d hold=%d nearest=%d (%+.0f ms)",
+    unameLen, uname, ch, pos, held, near, nearD);
+}
+
+// Holds ds, unplayed, for up to `swaps` swaps; returns the swaps applied. The queue
+// keeps its order. Its capacity (ds + next_ds[0..1]) holds one interval beyond the
+// natural depth: one more arrives while ds waits, and a further one would overwrite
+// next_ds[1] (RemoteDownload::startPlaying). So a hold is at most one swap, and
+// none when an interval is already queued.
+// A held ds keeps the crossfade state applied when it was installed at the swap
+// (applyOverlap from the previous ds). Rejoining channels had an empty or flushed
+// queue, so there was no previous audio to fade from.
+int NJClient::holdIntervalChannel(RemoteUser_Channel *chan, int swaps)
+{
+  const int room = (chan->next_ds[0] || chan->next_ds[1]) ? 0 : 1;
+  chan->hold_swaps = swaps < room ? swaps : room;
+  return chan->hold_swaps;
+}
+
 void NJClient::on_new_interval()
 {
   m_loopcnt++;
@@ -3203,7 +3311,11 @@ void NJClient::on_new_interval()
     {
       RemoteUser_Channel *chan=&user->channels[ch];
 
-      if (!(chan->flags&2) && !(chan->flags&4))
+      if (!(chan->flags&2) && !(chan->flags&4) && chan->hold_swaps > 0)
+      {
+        chan->hold_swaps--; // ds waits, unplayed, for the user's other channels
+      }
+      else if (!(chan->flags&2) && !(chan->flags&4))
       {
         chan->dump_samples=0;
         overlapFadeState fade_state;
@@ -3221,6 +3333,26 @@ void NJClient::on_new_interval()
           writeUserChanLog("",user,chan,ch);
         }
       }
+    }
+    for (ch = 0; ch < MAX_USER_CHANNELS; ch ++)
+      if (user->channels[ch].rejoin_grid) rejoinIntervalGrid(user, ch);
+#ifdef NINJAMCORE_TEST_HOOKS
+    if (m_test_hold_swaps > 0 && m_test_hold_ch >= 0 && m_test_hold_ch < MAX_USER_CHANNELS &&
+        user->channels[m_test_hold_ch].ds)
+    {
+      const char *un=user->name.Get(), *uat=strchr(un,'@');
+      const int ul = uat ? (int)(uat-un) : (int)strlen(un);
+      if ((int)m_test_hold_user.GetLength() == ul && !strncmp(un, m_test_hold_user.Get(), ul))
+      {
+        const int held = holdIntervalChannel(&user->channels[m_test_hold_ch], m_test_hold_swaps);
+        SYNCLOG("audio TEST-HOLD: user=%.*s ch=%d wanted=%d hold=%d", ul, un, m_test_hold_ch, m_test_hold_swaps, held);
+        m_test_hold_swaps = 0;
+      }
+    }
+#endif
+    for (ch = 0; ch < MAX_USER_CHANNELS; ch ++)
+    {
+      RemoteUser_Channel *chan=&user->channels[ch];
       if (!(chan->flags & 0x10) && (chan->ds || chan->next_ds[0] || chan->next_ds[1]))
       {
         int n = m_audio_queue.GetSize();
@@ -3229,6 +3361,7 @@ void NJClient::on_new_interval()
         {
           lstrcpyn_safe(e->username, user->name.Get(), sizeof(e->username));
           DecodeState *q[3] = { chan->ds, chan->next_ds[0], chan->next_ds[1] };
+          e->hold = chan->hold_swaps;
           for (int qi = 0; qi < 3; qi ++)
           {
             e->has[qi] = q[qi] != NULL;
@@ -3263,6 +3396,14 @@ void NJClient::on_new_interval()
       SYNCLOG("SWAP#%d audio: user=%.*s ch=%d ds=%s nds0=%s nds1=%s",
         m_sync_interval_cnt, dNameLen, dname, firstAudioCh,
         anyDs ? "Y" : "N", anyNds0 ? "Y" : "N", anyNds1 ? "Y" : "N");
+      for (int ci = 0; ci < MAX_USER_CHANNELS; ci++) {
+        RemoteUser_Channel *rc = &duser->channels[ci];
+        if ((rc->flags & 0x10) || !(duser->chanpresentmask & (1<<ci))) continue;
+        SYNCLOG("SWAP#%d audio-ch: user=%.*s ch=%d live=%d hold=%d ds=%02x%02x nds0=%s nds1=%s",
+          m_sync_interval_cnt, dNameLen, dname, ci, (rc->flags&2)?1:0, rc->hold_swaps,
+          rc->ds ? rc->ds->guid[0] : 0, rc->ds ? rc->ds->guid[1] : 0,
+          rc->next_ds[0] ? "Y" : "N", rc->next_ds[1] ? "Y" : "N");
+      }
     }
   }
 
@@ -3393,7 +3534,7 @@ void NJClient::on_new_interval()
         for (int ci = 0; ci < MAX_USER_CHANNELS; ci++) {
           RemoteUser_Channel *rc = &ru->channels[ci];
           if (rc->flags & 0x10) continue; // skip video channels
-          DecodeState *ds = rc->ds;
+          DecodeState *ds = rc->hold_swaps > 0 ? NULL : rc->ds; // held: not playing yet
           if (!ds) continue;
           audioHasData = true;
           if (!senderDs) senderDs = ds; // first-found fallback
@@ -3540,7 +3681,7 @@ void NJClient::on_new_interval()
       for (int ui = 0; ui < m_remoteusers.GetSize() && !audioPlaying; ui++) {
         RemoteUser *ru = m_remoteusers.Get(ui);
         if (ru && !strcmp(ru->name.Get(), vs->accumulating.username)) {
-          if (ru->channels[0].ds) audioPlaying = true;
+          if (ru->channels[0].ds && !ru->channels[0].hold_swaps) audioPlaying = true;
         }
       }
       if (audioPlaying && vs->synced) {
@@ -3656,6 +3797,8 @@ void NJClient::SetUserChannelState(int useridx, int channelidx,
       tmp=p->ds; p->ds=0;
       tmp2=p->next_ds[0]; p->next_ds[0]=0;
       tmp3=p->next_ds[1]; p->next_ds[1]=0;
+      p->rejoin_grid=0;
+      p->hold_swaps=0;
       m_users_cs.Leave();
 
       p->dump_samples=0;
@@ -3669,6 +3812,12 @@ void NJClient::SetUserChannelState(int useridx, int channelidx,
       mpb_client_set_usermask su;
       su.build_add_rec(user->name.Get(),(user->submask|=(1<<channelidx)));
       m_netcon->Send(su.build());
+      // Its queue starts empty again while the user's other channels kept theirs:
+      // rejoin their interval grid, as after voice chat.
+      m_users_cs.Enter();
+      p->rejoin_grid=1;
+      p->hold_swaps=0;
+      m_users_cs.Leave();
     }
 
   }
@@ -4011,7 +4160,7 @@ void NJClient::SetWorkDir(char *path)
 }
 
 
-RemoteUser_Channel::RemoteUser_Channel() : volume(1.0f), pan(0.0f), out_chan_index(0), flags(0), dump_samples(0), ds(NULL)
+RemoteUser_Channel::RemoteUser_Channel() : volume(1.0f), pan(0.0f), out_chan_index(0), flags(0), dump_samples(0), ds(NULL), rejoin_grid(0), hold_swaps(0)
 {
   decode_peak_vol[0]=decode_peak_vol[1]=0.0;
   memset(next_ds,0,sizeof(next_ds));
@@ -4136,7 +4285,7 @@ next_again:
 
 
 
-RemoteDownload::RemoteDownload() : chidx(-1), playtime(0), m_fp(0), m_decbuf(0)
+RemoteDownload::RemoteDownload() : chidx(-1), playtime(0), begin_ms(njc_now_ms()), m_fp(0), m_decbuf(0)
 {
   memset(&guid,0,sizeof(guid));
   time(&last_time);
@@ -4211,6 +4360,7 @@ void RemoteDownload::startPlaying(int force)
       if (!(theuser->channels[chidx].flags&4)) // only "play" if not a session channel
       {
         DecodeState *tmp=m_parent->start_decode(guid,theuser->channels[chidx].flags,m_fourcc,m_decbuf);
+        if (tmp) tmp->begin_ms = begin_ms;
 
 //        OutputDebugString(tmp?"started new decde\n":"tried to start new decode\n");
 
