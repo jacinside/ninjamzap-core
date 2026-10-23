@@ -94,6 +94,13 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
     // line ~955 "Measure input level after send gain").
     int32_t readCount = 0;
     oboe::AudioStream* inStream = m_inputStream.load(std::memory_order_acquire);
+    // The error a read can return. Checked because for this stream it is the
+    // ONLY notice of a lost device there will ever be: the input has no data
+    // callback, and AAudio delivers an error callback only to a stream that
+    // has one. Ignoring it is what made an unplugged microphone and a silent
+    // room look identical — the buffers simply stayed at zero, for the rest
+    // of the session, with nothing said.
+    oboe::Result readError = oboe::Result::OK;
     if (inStream) {
         int32_t channelCount = inStream->getChannelCount();
         if (channelCount == 1) {
@@ -102,6 +109,8 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
             if (result.value() > 0) {
                 readCount = result.value();
                 memcpy(m_inRight, m_inLeft, readCount * sizeof(float));
+            } else if (!result) {
+                readError = result.error();
             }
         } else if (channelCount == 2) {
             float interleavedInput[MAX_FRAMES * 2];
@@ -110,7 +119,35 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
             if (result.value() > 0) {
                 readCount = result.value();
                 deinterleave(interleavedInput, m_inLeft, m_inRight, readCount);
+            } else if (!result) {
+                readError = result.error();
             }
+        }
+#ifndef NDEBUG
+        if (m_simulateInputLoss.exchange(false, std::memory_order_relaxed)) {
+            readError = oboe::Result::ErrorDisconnected;
+        }
+#endif
+        // Only the two errors that mean the stream is gone for good.
+        // ErrorInvalidState deliberately does NOT belong here: the input is
+        // started asynchronously and its pointer is published before
+        // requestStart() completes, so an early read can legitimately find it
+        // still STARTING and return exactly that. Treating it as a loss would
+        // switch off a perfectly healthy microphone for the rest of the
+        // session. Disconnected and Closed have no such ambiguity.
+        if (readError == oboe::Result::ErrorDisconnected ||
+            readError == oboe::Result::ErrorClosed) {
+            // Record it and stop reading a stream that is gone. Nothing else
+            // happens here: this is the audio thread, so no logging, no
+            // allocation and no lock. Reopening is someone else's job.
+            m_inputDisconnects.fetch_add(1, std::memory_order_relaxed);
+            // compare_exchange so this only clears the pointer we actually
+            // read. If another thread swapped in a different stream while we
+            // were in read(), it is not ours to take away.
+            oboe::AudioStream* expected = inStream;
+            m_inputStream.compare_exchange_strong(
+                expected, nullptr, std::memory_order_release, std::memory_order_relaxed);
+            inStream = nullptr;
         }
     }
 

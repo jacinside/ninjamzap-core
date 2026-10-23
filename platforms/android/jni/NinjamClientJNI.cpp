@@ -997,7 +997,8 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamMetrics(
  *
  * nativeGetStreamMetrics returns nothing once the engine stops running, which
  * is exactly the moment a loss is most interesting. Returns
- * [outputDisconnects, callbackCount, millisSinceLastCallback].
+ * [outputDisconnects, callbackCount, millisSinceLastCallback,
+ *  inputDisconnects].
  *
  * The last two are the ones that matter when a stream dies without saying so:
  * callbacks simply stop while the stream still reports itself open.
@@ -1006,15 +1007,34 @@ JNIEXPORT jintArray JNICALL
 Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetStreamHealth(
     JNIEnv* env, jobject thiz, jlong enginePtr) {
     auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
-    jint values[3] = {0, 0, -1};
+    jint values[4] = {0, 0, -1, 0};
     if (eng) {
         values[0] = static_cast<jint>(eng->getOutputDisconnects());
         values[1] = static_cast<jint>(eng->getCallbackCount());
         values[2] = static_cast<jint>(eng->getMillisSinceLastCallback());
+        values[3] = static_cast<jint>(eng->getInputDisconnects());
     }
-    jintArray arr = env->NewIntArray(3);
-    env->SetIntArrayRegion(arr, 0, 3, values);
+    jintArray arr = env->NewIntArray(4);
+    env->SetIntArrayRegion(arr, 0, 4, values);
     return arr;
+}
+
+/**
+ * Test seam, debug builds only: makes the next input read see a device loss.
+ * A no-op in release. Returns true when it actually ran.
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSimulateInputLoss(
+    JNIEnv* env, jobject thiz, jlong enginePtr) {
+#ifndef NDEBUG
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return JNI_FALSE;
+    eng->simulateInputLossForTest();
+    return JNI_TRUE;
+#else
+    (void)enginePtr;
+    return JNI_FALSE;
+#endif
 }
 
 /**

@@ -31,9 +31,19 @@ public:
     int64_t getCallbackCount() const { return m_callbackCount.load(std::memory_order_relaxed); }
     int64_t getLastCallbackUptimeMs() const { return m_lastCallbackUptimeMs.load(std::memory_order_relaxed); }
     int32_t getOutputDisconnects() const { return m_outputDisconnects.load(std::memory_order_relaxed); }
+    int32_t getInputDisconnects() const { return m_inputDisconnects.load(std::memory_order_relaxed); }
 
     /** Test seam: raises the disconnect path without a real device loss. */
     void simulateDisconnectForTest(oboe::Result error) { onErrorAfterClose(nullptr, error); }
+
+#ifndef NDEBUG
+    /**
+     * Test seam, debug builds only: makes the next input read behave as if the
+     * device had gone. Losing a real capture device on demand is not something
+     * a test can arrange.
+     */
+    void simulateInputLossForTest() { m_simulateInputLoss.store(true, std::memory_order_relaxed); }
+#endif
 
     // Set the FX processor for local input effects
     void setFXProcessor(AudioFXProcessor* fxProcessor);
@@ -87,6 +97,17 @@ private:
     /** Disconnects reported by the HAL on the output stream. */
     std::atomic<int32_t> m_outputDisconnects{0};
 
+    /**
+     * Times the input stream reported itself gone while being read.
+     *
+     * Counted separately from the output's because it is found a completely
+     * different way. The input has no data callback — it is read synchronously
+     * from the output's callback — and AAudio only delivers an error callback
+     * to a stream that has one. So no error callback can ever fire for it, and
+     * the return value of read() is the only notice there will be.
+     */
+    std::atomic<int32_t> m_inputDisconnects{0};
+
     // Intermediate buffers for deinterleaving stereo to L/R
     static constexpr int MAX_FRAMES = 2048;
     float m_inLeft[MAX_FRAMES] = {};
@@ -129,6 +150,10 @@ private:
     // overrun / drift); the tail is zero-filled, so it is an audible glitch
     // on the mic path that AAudio's xrun counter does not always report.
     std::atomic<int32_t> m_inputShortReads{0};
+
+#ifndef NDEBUG
+    std::atomic<bool> m_simulateInputLoss{false};
+#endif
 
     /**
      * Monotonic count of data callbacks, and when the last one ran.

@@ -130,6 +130,17 @@ public:
     }
 
     /**
+     * Times the input stream reported itself gone while being read, which is
+     * the only notice there is for it: the input has no data callback, so
+     * AAudio never delivers an error callback for it. Before this was
+     * counted, an unplugged microphone looked exactly like a quiet room, for
+     * the rest of the session.
+     */
+    int32_t getInputDisconnects() const {
+        return m_callback ? m_callback->getInputDisconnects() : 0;
+    }
+
+    /**
      * How many audio callbacks have run, and how long since the last one.
      *
      * The decisive pair. A stream can stop being driven while still reporting
@@ -171,6 +182,11 @@ public:
      */
     void simulateDisconnectForTest() {
         if (m_callback) m_callback->simulateDisconnectForTest(oboe::Result::ErrorDisconnected);
+    }
+
+    /** Test seam, debug builds only: makes the next input read see a loss. */
+    void simulateInputLossForTest() {
+        if (m_callback) m_callback->simulateInputLossForTest();
     }
 #endif
 
