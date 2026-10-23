@@ -1040,10 +1040,21 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetSlowSettle(
 }
 
 /**
+ * Runs a recovery now and reports whether the streams came back. Blocks for
+ * as long as a pass takes.
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeRetryRecovery(
+    JNIEnv* env, jobject thiz, jlong enginePtr) {
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    return (eng && eng->retryRecoveryNow()) ? JNI_TRUE : JNI_FALSE;
+}
+
+/**
  * Cheap poll for "did the streams get reopened under us?".
  *
- * Packed into one int — reopens in the high half, failures in the low — so the
- * 200 ms loop that watches it allocates nothing. Callers compare it with the
+ * Packed into one int — reopens in the high half, failures in the low — so a
+ * periodic poll can watch it without allocating. Callers compare it with the
  * last value they saw; any change means the streams are new, and anything
  * attached to the old ones has to be attached again.
  */
@@ -1052,7 +1063,12 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetRecoveryTick(
     JNIEnv* env, jobject thiz, jlong enginePtr) {
     auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
     if (!eng) return 0;
-    return static_cast<jint>((eng->getReopenCount() << 16) | (eng->getRecoveryFailures() & 0xFFFF));
+    // Shift as unsigned: left-shifting a signed int into the sign bit is
+    // undefined behaviour, and these counters are only ever compared for
+    // equality, so the packed value just has to be stable.
+    const uint32_t reopens  = static_cast<uint32_t>(eng->getReopenCount());
+    const uint32_t failures = static_cast<uint32_t>(eng->getRecoveryFailures());
+    return static_cast<jint>((reopens << 16) | (failures & 0xFFFFu));
 }
 
 /**

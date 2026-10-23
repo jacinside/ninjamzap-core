@@ -235,6 +235,18 @@ bool OboeEngine::recoverStreams(uint64_t generation) {
     return false;
 }
 
+bool OboeEngine::retryRecoveryNow() {
+    if (!m_running.load()) return false;
+    uint64_t generation;
+    {
+        std::lock_guard<std::mutex> lock(m_recoveryMutex);
+        if (m_recoveryShutdown) return false;
+        generation = m_stopGeneration;
+    }
+    LOGI("retrying stream recovery on request");
+    return recoverStreams(generation);
+}
+
 void OboeEngine::stop() {
     // Retire the worker FIRST, and without m_streamMutex.
     //

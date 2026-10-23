@@ -145,6 +145,17 @@ public:
     /** Streams successfully reopened after a loss. */
     int32_t getReopenCount() const { return m_reopenCount.load(std::memory_order_relaxed); }
 
+    /**
+     * Runs a recovery here and now, on the caller's thread, and says whether
+     * the streams came back. For the retry a person asks for after the
+     * automatic attempts gave up — they may have plugged the device back in,
+     * which is exactly the case the worker cannot know about.
+     *
+     * Blocks for as long as a pass takes, up to about a second with the
+     * retries and backoff, so call it from somewhere that can wait.
+     */
+    bool retryRecoveryNow();
+
     /** Losses where every reopen attempt failed and the audio stayed gone. */
     int32_t getRecoveryFailures() const { return m_recoveryFailures.load(std::memory_order_relaxed); }
 
