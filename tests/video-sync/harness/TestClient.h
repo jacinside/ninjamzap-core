@@ -34,6 +34,9 @@ struct VideoFrameRecord {
   // with the sender's stamped sendTimestampUs (in FakeFrame payload) this gives
   // per-frame send→deliver latency.
   uint64_t deliverTimestampUs = 0;
+  // Receiver output sample (recordOutput) at the end of the audio block in which
+  // the frame was delivered: what the listener hears when the frame is shown.
+  int64_t outputSample = -1;
 };
 
 struct RawDataRecord {
@@ -55,10 +58,18 @@ public:
     bool sendAudio = true;     // claim ch0, broadcast silence
     bool sendVideo = false;    // claim ch1, fourcc=H264, flags=0x10
     int videoChannel = 1;
+    // Second interval-mode audio channel (e.g. 1, with videoChannel moved to 2).
+    // -1 = none.
+    int extraAudioChannel = -1;
     int audioBitrate = 64;
     // Audio thread pacing — number of samples per AudioProc call. Default = 480 (10ms@48k).
     int audioBlockSize = 480;
     int sampleRate = 48000;
+    // Input L (ch0) and R (ch1, extraAudioChannel) carry a tone tagging the
+    // interval they're recorded in (ToneTag.h).
+    bool toneInput = false;
+    // Keep every output sample (L/R) for content checks (ToneTag.h).
+    bool recordOutput = false;
   };
 
   explicit TestClient(Options opts);
@@ -95,6 +106,18 @@ public:
   // clients. Same effect as a scheduling hiccup, or as clock drift between devices.
   void stallAudio(int ms) { stallMs_.store(ms); }
 
+  // Stall this client's network thread (Run()) for `ms`: nothing is sent or
+  // received meanwhile, then everything queued in the socket is processed in a
+  // burst — a congested or briefly dropped connection.
+  void stallNetwork(int ms) { netStallMs_.store(ms); }
+
+  // Puts local audio channel `ch` in NINJAM voice-chat mode (flags |= 2) or back
+  // in interval mode, and tells the server — what the app's voice-chat toggle does.
+  // notify=false only changes the local flag (the sender's own interval logic
+  // follows it at once); notifyChannels() then tells the server, later.
+  void setVoiceChat(int ch, bool on, bool notify = true);
+  void notifyChannels();
+
   // Drains and returns recorded video frames from VideoFrameReady_Callback.
   std::vector<VideoFrameRecord> drainVideoFrames();
 
@@ -118,6 +141,20 @@ public:
   int intervalSwapCount() const { return swapCallbackCount_.load(); }
 
   NJClient *raw() { return client_; }
+
+  // Copies of the recorded output (recordOutput).
+  void outputSnapshot(std::vector<float> &l, std::vector<float> &r);
+
+  // Pans remote `user`'s channel `ch` (-1 left .. 1 right). False if not found.
+  bool panRemoteChannel(const std::string &user, int ch, float pan);
+
+  // Subscribes to / unsubscribes from remote `user`'s channel `ch` (the app's
+  // per-channel receive switch). False if not found.
+  bool subscribeRemoteChannel(const std::string &user, int ch, bool on);
+
+  // At the receiver's next swap, hold remote `user`'s channel `ch` for `swaps`
+  // swaps (NJClient::TestRequestIntervalHold).
+  void requestIntervalHold(const std::string &user, int ch, int swaps);
   const std::string &username() const { return opts_.user; }
 
 private:
@@ -140,12 +177,19 @@ private:
   std::atomic<bool> stop_{false};
   std::atomic<bool> joined_{false};
   std::atomic<int> stallMs_{0};
+  std::atomic<int> netStallMs_{0};
   std::atomic<bool> videoChannelRegistered_{false};
   std::atomic<int> currentSwap_{0};
   std::atomic<int> swapCallbackCount_{0};
 
   mutable std::mutex framesMu_;
   std::deque<VideoFrameRecord> frames_;
+
+  std::mutex outMu_;
+  std::vector<float> recL_, recR_;
+  std::atomic<int64_t> blockEndSample_{-1};
+  double tonePhase_ = 0.0;
+  int64_t outCount_ = 0; // audio thread only
 
   mutable std::mutex rawMu_;
   std::deque<RawDataRecord> rawEvents_;

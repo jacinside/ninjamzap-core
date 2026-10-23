@@ -8,6 +8,8 @@
 
 #include "njclient.h"
 #include "FakeFrame.h" // for nowMicros()
+#include "ToneTag.h"
+#include <cmath>
 
 namespace videosync {
 
@@ -77,6 +79,12 @@ bool TestClient::connectAndJoin(std::chrono::milliseconds timeout) {
       if (opts_.sendAudio) {
         client_->SetLocalChannelInfo(0, "audio",
                                      /*setsrcch*/ true, 0,
+                                     /*setbitrate*/ true, opts_.audioBitrate,
+                                     /*setbcast*/ true, true);
+      }
+      if (opts_.extraAudioChannel >= 0) {
+        client_->SetLocalChannelInfo(opts_.extraAudioChannel, "audio2",
+                                     /*setsrcch*/ true, 1,
                                      /*setbitrate*/ true, opts_.audioBitrate,
                                      /*setbcast*/ true, true);
       }
@@ -153,6 +161,71 @@ void TestClient::resumeVideo() {
                              (unsigned int)('H') | ((unsigned int)'2' << 8) |
                                  ((unsigned int)'6' << 16) | ((unsigned int)'4' << 24));
   }
+}
+
+void TestClient::notifyChannels() {
+  if (client_) client_->NotifyServerOfChannelChange();
+}
+
+void TestClient::setVoiceChat(int ch, bool on, bool notify) {
+  if (!client_) return;
+  client_->SetLocalChannelInfo(ch, NULL,
+                               /*setsrcch*/ false, 0,
+                               /*setbitrate*/ false, 0,
+                               /*setbcast*/ false, false,
+                               /*setoutch*/ false, 0,
+                               /*setflags*/ true, on ? 2 : 0);
+  if (notify) client_->NotifyServerOfChannelChange();
+}
+
+void TestClient::outputSnapshot(std::vector<float> &l, std::vector<float> &r) {
+  std::lock_guard<std::mutex> lk(outMu_);
+  l = recL_;
+  r = recR_;
+}
+
+static int findRemoteUser(NJClient *client, const std::string &user) {
+  for (int i = 0; i < client->GetNumUsers(); ++i) {
+    const char *n = client->GetUserState(i);
+    if (!n) continue;
+    std::string s(n);
+    const size_t at = s.find('@');
+    if (at != std::string::npos) s.resize(at);
+    if (s == user || (s.size() > user.size() &&
+                      s.compare(s.size() - user.size(), user.size(), user) == 0))
+      return i;
+  }
+  return -1;
+}
+
+bool TestClient::subscribeRemoteChannel(const std::string &user, int ch, bool on) {
+  if (!client_) return false;
+  const int i = findRemoteUser(client_, user);
+  if (i < 0) return false;
+  client_->SetUserChannelState(i, ch, true, on, false, 0.f, false, 0.f, false, false, false, false);
+  return true;
+}
+
+void TestClient::requestIntervalHold(const std::string &user, int ch, int swaps) {
+#ifdef NINJAMCORE_TEST_HOOKS
+  if (client_) client_->TestRequestIntervalHold(user.c_str(), ch, swaps);
+#endif
+}
+
+bool TestClient::panRemoteChannel(const std::string &user, int ch, float pan) {
+  if (!client_) return false;
+  for (int i = 0; i < client_->GetNumUsers(); ++i) {
+    const char *n = client_->GetUserState(i);
+    if (!n) continue;
+    std::string s(n);
+    const size_t at = s.find('@');
+    if (at != std::string::npos) s.resize(at);
+    if (s == user || (s.size() > user.size() && s.compare(s.size() - user.size(), user.size(), user) == 0)) {
+      client_->SetUserChannelState(i, ch, false, false, false, 0.f, true, pan, false, false, false, false);
+      return true;
+    }
+  }
+  return false;
 }
 
 void TestClient::sendFakeSPSPPS() {
@@ -238,6 +311,7 @@ void TestClient::videoReadyCb(void *userData, const char *username, int chidx,
   }
   rec.receivedAtSwap = self->currentSwap_.load();
   rec.deliverTimestampUs = videosync::nowMicros();
+  rec.outputSample = self->blockEndSample_.load();
   std::lock_guard<std::mutex> lk(self->framesMu_);
   self->frames_.emplace_back(std::move(rec));
 }
@@ -252,6 +326,8 @@ void TestClient::intervalSwapCb(void *userData) {
 
 void TestClient::runThreadFn() {
   while (!stop_.load()) {
+    int ns = netStallMs_.exchange(0);
+    if (ns > 0) std::this_thread::sleep_for(std::chrono::milliseconds(ns));
     int sleepy = client_->Run();
     if (sleepy) std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
@@ -285,9 +361,32 @@ void TestClient::audioThreadFn() {
       if (!catchup) next = std::chrono::steady_clock::now();
     }
     if (joined_.load()) {
+      if (opts_.toneInput) {
+        // Tag each input sample with the interval it's recorded in; the interval
+        // boundary inside this block (if any) is where AudioProc will swap.
+        int pos = 0, len = 0;
+        client_->GetPosition(&pos, &len);
+        const int boundary = (len > 0 && pos >= 0 && len - pos < block) ? len - pos : block;
+        const int tag = currentSwap_.load();
+        for (int i = 0; i < block; ++i) {
+          const int t = i < boundary ? tag : tag + 1;
+          const double w = 2.0 * M_PI * videosync::toneFreqForTag(t) / srate;
+          tonePhase_ += w;
+          if (tonePhase_ > 2.0 * M_PI) tonePhase_ -= 2.0 * M_PI;
+          silenceL[i] = silenceR[i] = (float)(0.3 * std::sin(tonePhase_));
+        }
+      }
+      // frames delivered inside this AudioProc are shown at the end of this block
+      if (opts_.recordOutput) blockEndSample_.store(outCount_ + block);
       client_->AudioProc(inbuf, 2, outbuf, 2, block, srate,
                          /*justmonitor*/ false, /*isPlaying*/ true,
                          /*isSeek*/ false, /*cursessionpos*/ -1.0);
+      if (opts_.recordOutput) {
+        outCount_ += block;
+        std::lock_guard<std::mutex> lk(outMu_);
+        recL_.insert(recL_.end(), outL.begin(), outL.end());
+        recR_.insert(recR_.end(), outR.begin(), outR.end());
+      }
     }
     next += period;
     auto now = std::chrono::steady_clock::now();

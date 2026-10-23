@@ -35,7 +35,9 @@ BREW_PREFIX ?= $(shell brew --prefix 2>/dev/null || echo /opt/homebrew)
 INCLUDES := -I$(CORE) -I$(WDL) -I$(VENDOR) -I$(HARNESS) -I$(BREW_PREFIX)/include
 # DEBUG enables SYNCLOG in njclient.cpp (gated since the Release-build log
 # cleanup) — the harness asserts on SYNCLOG events via SyncLogCapture.
-DEFINES  := -DNINJAMCORE_HOST_BUILD=1 -DDEBUG=1 -DNINJAMCORE_SYNCLOG_HOOK=1 -D_DARWIN_C_SOURCE
+# NINJAMCORE_TEST_HOOKS exposes test-only NJClient entry points; set only here
+# (NINJAMCORE_HOST_BUILD is also a production define, e.g. in the bot).
+DEFINES  := -DNINJAMCORE_HOST_BUILD=1 -DNINJAMCORE_TEST_HOOKS=1 -DDEBUG=1 -DNINJAMCORE_SYNCLOG_HOOK=1 -D_DARWIN_C_SOURCE
 # -MMD -MP: each object also depends on the headers it includes (build/**/*.d),
 # so editing a header rebuilds every scenario and harness file that uses it.
 DEPFLAGS := -MMD -MP
