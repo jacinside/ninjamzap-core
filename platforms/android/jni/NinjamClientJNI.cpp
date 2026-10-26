@@ -1147,8 +1147,12 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetCallbackStallUs(
 JNIEXPORT jintArray JNICALL
 Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetTunerState(
     JNIEnv* env, jobject thiz, jlong enginePtr) {
-    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
     jint vals[5] = {0, 0, 0, 0, 0};
+#ifndef NDEBUG
+    // The accessors behind this live with the seams they serve and are not
+    // compiled into a release build, so neither is this body. A release
+    // caller gets zeros rather than a link error.
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
     if (eng) {
         vals[0] = eng->getTunerGrowCount();
         vals[1] = eng->getTunerSuppressedCount();
@@ -1156,6 +1160,9 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetTunerState(
         vals[3] = eng->getOutputBurstFrames();
         vals[4] = eng->isInputLoopbackOn() ? 1 : 0;
     }
+#else
+    (void)enginePtr;
+#endif
     jintArray out = env->NewIntArray(5);
     if (out) env->SetIntArrayRegion(out, 0, 5, vals);
     return out;
