@@ -131,6 +131,7 @@ public:
   {
     refcnt=1;
     rdpos=0;
+    end_ms=0.0;
   }
   ~DecodeMediaBuffer()
   {
@@ -144,6 +145,10 @@ public:
     m_buf.Add(buf,len);
     mutex.Leave();
   }
+
+  // When the download's END arrived (njc_now_ms()); 0 while it is still streaming.
+  // Written by the network thread once, read at the interval swap.
+  volatile double end_ms;
 
   int Avail() { return m_buf.Available() - rdpos; }
   int Size() { return m_buf.Available(); }
@@ -3222,19 +3227,37 @@ void NJClient::rejoinIntervalGrid(RemoteUser *user, int ch)
     chan->rejoin_grid=2;
     return;
   }
-  // Queue position the sibling has, or will have, for the interval that began with
-  // ours (0 = playing now). Take the sibling interval whose BEGIN is nearest ours:
-  // it began k intervals after ours, so ours belongs k positions before it. This
-  // holds when the sibling's own interval hasn't arrived yet (k < 0) or was lost
-  // from its queue (k > 0).
+  // Queue position the sibling has, or will have, for the interval recorded with
+  // ours (0 = playing now). Take the sibling interval nearest ours in time: it is k
+  // intervals after ours, so ours belongs k positions before it. This holds when
+  // the sibling's own interval hasn't arrived yet (k < 0) or was lost from its
+  // queue (k > 0).
+  // Every channel's interval ENDs at the sender's next boundary, whatever its
+  // content; its BEGIN waits for the first upload block, which a silent or quiet
+  // channel only fills at that boundary, one interval late. So compare END times
+  // when ours has ended, estimating a sibling interval still streaming from one
+  // that has ended (queue entries are consecutive intervals); BEGIN times otherwise.
   DecodeState *q[3]={ref->ds,ref->next_ds[0],ref->next_ds[1]};
   const double intervalMs = m_srate > 0 ? 1000.0 * m_interval_length / m_srate : 0.0;
+  const double ourEnd = chan->ds->decode_buf ? chan->ds->decode_buf->end_ms : 0.0;
+  int ended=-1;
+  double endedAt=0.0;
+  for (int i = 0; i < 3 && ended < 0; i ++)
+    if (q[i] && q[i]->decode_buf && q[i]->decode_buf->end_ms > 0.0) { ended=i; endedAt=q[i]->decode_buf->end_ms; }
+  const bool byEnd = ourEnd > 0.0 && ended >= 0;
   int near=-1;
   double nearD=0.0;
   for (int i = 0; i < 3; i ++)
   {
     if (!q[i]) continue;
-    const double d=q[i]->begin_ms - chan->ds->begin_ms;
+    double d;
+    if (byEnd)
+    {
+      const double e = q[i]->decode_buf && q[i]->decode_buf->end_ms > 0.0 ?
+                       q[i]->decode_buf->end_ms : endedAt + (i - ended) * intervalMs;
+      d = e - ourEnd;
+    }
+    else d = q[i]->begin_ms - chan->ds->begin_ms;
     if (near < 0 || fabs(d) < fabs(nearD)) { near=i; nearD=d; }
   }
   const int k = intervalMs > 0.0 ? (int)floor(nearD / intervalMs + 0.5) : 0;
@@ -3247,8 +3270,8 @@ void NJClient::rejoinIntervalGrid(RemoteUser *user, int ch)
   }
   chan->rejoin_grid=0;
   const int held = holdIntervalChannel(chan, pos);
-  SYNCLOG("audio REJOIN: user=%.*s ch=%d wanted=%d hold=%d nearest=%d (%+.0f ms)",
-    unameLen, uname, ch, pos, held, near, nearD);
+  SYNCLOG("audio REJOIN: user=%.*s ch=%d wanted=%d hold=%d nearest=%d (%+.0f ms by %s)",
+    unameLen, uname, ch, pos, held, near, nearD, byEnd ? "END" : "BEGIN");
 }
 
 // Holds ds, unplayed, for up to `swaps` swaps; returns the swaps applied. The queue
@@ -4300,6 +4323,7 @@ void RemoteDownload::Close()
 {
   if (m_fp) fclose(m_fp);
   m_fp=0;
+  if (m_decbuf) m_decbuf->end_ms = njc_now_ms();
   startPlaying(1);
   if (m_decbuf)
   {

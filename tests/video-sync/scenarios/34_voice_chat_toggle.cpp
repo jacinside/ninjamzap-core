@@ -35,7 +35,15 @@ using namespace std::chrono_literals;
 
 namespace {
 
-constexpr int kIntervalMs = 1000; // test.cfg: 240 BPM / 4 BPI
+// test.cfg: 240 BPM / 4 BPI = 1 s; NJ_TEST_INTERVAL_MS for a server with real intervals.
+const int kIntervalMs = std::getenv("NJ_TEST_INTERVAL_MS") ? std::atoi(std::getenv("NJ_TEST_INTERVAL_MS")) : 1000;
+
+// 34e/34f: the sender's ch0 is silent and its music is on ch1 (talkback + drums).
+bool gSilentCh0 = false;
+bool gWholeRun = false; // 36: content report for every interval from the first OFF
+bool gCh0Stereo = false;
+float gCh0Gain = 1.f; // sender ch0 tone level relative to ch1 (a mic that is mostly quiet)
+int gRecvPhaseMs = kIntervalMs / 2; // how far the receiver's swap lags the sender's
 
 videosync::TestClient::Options makeOpts(const std::string &user, bool sender) {
   videosync::TestClient::Options o;
@@ -49,6 +57,15 @@ videosync::TestClient::Options makeOpts(const std::string &user, bool sender) {
   if (sender) {
     o.extraAudioChannel = 1; // ch1: interval-mode audio next to the voice-chat ch0
     o.videoChannel = 2;
+    o.ch0Gain = gCh0Gain;
+    o.ch0Stereo = gCh0Stereo;
+    if (gSilentCh0) {
+      o.silentCh0 = true;
+      // A loud channel reaches the encoder's first-block threshold early in the
+      // interval and a silent one never does; at 1 s intervals that needs a
+      // higher bitrate than the default to show the same arrival order.
+      o.audioBitrate = 192;
+    }
   }
   return o;
 }
@@ -76,6 +93,7 @@ struct RunResult {
   std::vector<Pushed> pushed;
   std::vector<videosync::VideoFrameRecord> delivered;
   int offTag = -1;       // sender swap at the last voice-chat OFF
+  int firstOffTag = -1;  // sender swap at the first voice-chat OFF
   int lastEventTag = -1; // sender swap when the last toggle/stall is over
 };
 
@@ -102,7 +120,7 @@ RunResult runPlan(videosync::TestClient &sender, videosync::TestClient &receiver
         std::fprintf(stderr, "[scenario34] t=%dms voice chat %s at sender swap %d%s\n",
                      nowMs, s.voiceChat ? "ON" : "OFF", sender.currentSwap(),
                      s.notifyAfterBoundary ? " (server told after the next boundary)" : "");
-        if (s.voiceChat == 0) r.offTag = sender.currentSwap();
+        if (s.voiceChat == 0) { r.offTag = sender.currentSwap(); if (r.firstOffTag < 0) r.firstOffTag = r.offTag; }
       }
       if (s.stallSenderMs > 0) sender.stallAudio(s.stallSenderMs);
       if (s.stallRecvMs > 0) receiver.stallAudio(s.stallRecvMs);
@@ -296,6 +314,7 @@ void checkContent(videosync::TestClient &receiver, const RunResult &r, int first
   const int kWin = 2048;
   int checked = 0, vidCh0 = 0, vidCh1 = 0, ch0Ch1 = 0, silent = 0, printed = 0;
   std::map<int, int> offCh0, offCh1; // (audio tag - video tag) mod 16, signed
+  std::map<int, std::map<std::string, int>> perTag; // video interval -> audio offsets (99 = no tone)
   auto signedOff = [](int a, int v) {
     int d = ((a - v) % videosync::kToneTags + videosync::kToneTags) % videosync::kToneTags;
     return d >= videosync::kToneTags / 2 ? d - videosync::kToneTags : d;
@@ -310,10 +329,15 @@ void checkContent(videosync::TestClient &receiver, const RunResult &r, int first
     const int a1 = videosync::detectToneTag(R.data() + f.outputSample, kWin, 48000);
     const int v = tag % videosync::kToneTags;
     ++checked;
-    if (a0 < 0 || a1 < 0) ++silent;
+    if ((a0 < 0 && !gSilentCh0) || a1 < 0) ++silent;
     if (a0 >= 0) offCh0[signedOff(a0, v)]++;
     if (a1 >= 0) offCh1[signedOff(a1, v)]++;
-    const bool bad0 = a0 != v, bad1 = a1 != v, bad01 = a0 != a1;
+    {
+      char k[48];
+      std::snprintf(k, sizeof k, "ch0%+d ch1%+d", a0 < 0 ? 99 : signedOff(a0, v), a1 < 0 ? 99 : signedOff(a1, v));
+      perTag[tag][k]++;
+    }
+    const bool bad0 = !gSilentCh0 && a0 != v, bad1 = a1 != v, bad01 = !gSilentCh0 && a0 != a1;
     vidCh0 += bad0;
     vidCh1 += bad1;
     ch0Ch1 += bad01;
@@ -322,6 +346,13 @@ void checkContent(videosync::TestClient &receiver, const RunResult &r, int first
                    name, p.seq, tag, f.receivedAtSwap,
                    a0 < 0 ? "none" : std::to_string(tag + signedOff(a0, v)).c_str(),
                    a1 < 0 ? "none" : std::to_string(tag + signedOff(a1, v)).c_str());
+  }
+  if (std::getenv("NJ_REAL_PER_TAG")) {
+    for (const auto &kv : perTag) {
+      std::fprintf(stderr, "[%s]   PERTAG video=%d:", name, kv.first);
+      for (const auto &c : kv.second) std::fprintf(stderr, " [%s]x%d", c.first.c_str(), c.second);
+      std::fprintf(stderr, "\n");
+    }
   }
   std::fprintf(stderr, "[%s] content tags %d..%d: frames=%d video!=ch0:%d video!=ch1:%d ch0!=ch1:%d silent:%d\n",
                name, firstTag, lastTag, checked, vidCh0, vidCh1, ch0Ch1, silent);
@@ -361,9 +392,11 @@ void runCase(const char *name, const std::string &prefix, const std::vector<Step
   // On localhost both clients swap within a few ms of each other, so the video
   // BEGIN races the receiver's swap. Put the receiver half an interval behind,
   // as a real link would place it somewhere, so the baseline is deterministic.
-  receiver.stallAudio(kIntervalMs / 2);
+  receiver.stallAudio(gRecvPhaseMs);
   std::this_thread::sleep_for(std::chrono::milliseconds(2 * kIntervalMs));
   // Sender ch0 to the left output, ch1 to the right, for the content check.
+  for (int i = 0; i < 300 && !receiver.panRemoteChannel(prefix + "_sender", 0, -1.f); ++i)
+    std::this_thread::sleep_for(100ms);
   REQUIRE(receiver.panRemoteChannel(prefix + "_sender", 0, -1.f));
   REQUIRE(receiver.panRemoteChannel(prefix + "_sender", 1, 1.f));
 
@@ -374,7 +407,8 @@ void runCase(const char *name, const std::string &prefix, const std::vector<Step
   const int lastTag = r.pushed.back().tag - 1; // the last interval may still be in flight
   // Settled: from the second interval after the toggle (the one it lands in, then
   // one transition interval), or after the last stall, whichever comes later.
-  const int firstTag = std::max(r.offTag, r.lastEventTag) + 2;
+  const int firstTag = gWholeRun ? r.firstOffTag : std::max(r.offTag, r.lastEventTag) + 2;
+  if (gWholeRun) { checkContent(receiver, r, firstTag, lastTag, name); return; }
   REQUIRE(lastTag - firstTag >= 4);
   checkSettled(r, firstTag, lastTag, name);
   checkPacing(r, r.offTag + 2, lastTag, name);
@@ -570,4 +604,46 @@ TEST_CASE("34g_resubscribe_after_stall — receive switch off/on, no voice chat"
   resub.subscribeCh1 = 1;
   runCase("scenario34g", "vc34g",
           {{3000, -1, 0, 1500}, {5000, 2, 0, 0}, unsub, resub}, 16000);
+}
+
+TEST_CASE("34s_silent_ch0 — video follows the sender's music when its ch0 is silent",
+          "[sync][scenario34]") {
+  // No voice chat. ch0 never fills the first upload block, so each of its
+  // intervals reaches the receiver only at the sender's next boundary, together
+  // with the video of that next interval, whose marker references it.
+  gSilentCh0 = true;
+  runCase("scenario34s", "vc34s", {{3000, 2, 0, 0}}, 14000);
+  gSilentCh0 = false;
+}
+
+TEST_CASE("34t_silent_ch0_voice_chat_off — silent ch0, voice chat ON then OFF",
+          "[sync][scenario34]") {
+  gSilentCh0 = true;
+  runCase("scenario34t", "vc34t", {{3000, 1, 0, 0}, {7000, 0, 0, 0}}, 16000);
+  gSilentCh0 = false;
+}
+
+// 36: Javier's manual test. Two local channels; ch0 (mono or stereo) toggles voice
+// chat ON for 2 intervals, OFF for 2, repeatedly, each toggle at a different point
+// of the interval; ch1 never. Real interval (NJ_TEST_INTERVAL_MS). Content is checked
+// for every interval from the first OFF on (NJ_REAL_PER_TAG=1 prints each one).
+TEST_CASE("36_manual_toggles", "[.][scenario36]") {
+  const int I = kIntervalMs;
+  gCh0Stereo = std::getenv("NJ_CH0_STEREO") != nullptr;
+  gRecvPhaseMs = std::getenv("NJ_REAL_PHASE_MS") ? std::atoi(std::getenv("NJ_REAL_PHASE_MS")) : I / 2;
+  const char *pf = std::getenv("NJ_REAL_PREFIX");
+  const std::string prefix = pf ? pf : "m36";
+  gWholeRun = true;
+  // NJ_CH0_MUTED: the voice-chat channel is muted (sends silence) while it toggles.
+  gSilentCh0 = std::getenv("NJ_CH0_MUTED") != nullptr;
+  const double at[] = {0.10, 0.45, 0.80, 0.25, 0.60, 0.95, 0.35, 0.70};
+  std::vector<Step> plan;
+  int t = 3 * I;
+  for (int i = 0; i < 8; ++i) {
+    plan.push_back({t - (t % I) + (int)(at[i] * I), (i % 2) ? 0 : 1, 0, 0});
+    t += 2 * I;
+  }
+  std::fprintf(stderr, "[%s] interval=%dms ch0=%s phase=%dms\n", prefix.c_str(), I,
+               gCh0Stereo ? "stereo" : "mono", gRecvPhaseMs);
+  runCase(prefix.c_str(), prefix, plan, t + 3 * I);
 }

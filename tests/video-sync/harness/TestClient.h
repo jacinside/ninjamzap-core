@@ -68,6 +68,11 @@ public:
     // Input L (ch0) and R (ch1, extraAudioChannel) carry a tone tagging the
     // interval they're recorded in (ToneTag.h).
     bool toneInput = false;
+    // With toneInput: leave input L (ch0) silent, tone on R (ch1) only — a sender
+    // whose first channel is an unused talkback/mic while it plays on another one.
+    bool silentCh0 = false;
+    float ch0Gain = 1.f; // with toneInput: ch0 tone level relative to ch1
+    bool ch0Stereo = false; // ch0 takes inputs L+R (stereo) instead of L (mono)
     // Keep every output sample (L/R) for content checks (ToneTag.h).
     bool recordOutput = false;
   };

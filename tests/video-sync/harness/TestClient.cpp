@@ -78,7 +78,7 @@ bool TestClient::connectAndJoin(std::chrono::milliseconds timeout) {
       // Configure local channels now that the connection is established.
       if (opts_.sendAudio) {
         client_->SetLocalChannelInfo(0, "audio",
-                                     /*setsrcch*/ true, 0,
+                                     /*setsrcch*/ true, opts_.ch0Stereo ? 1024 : 0,
                                      /*setbitrate*/ true, opts_.audioBitrate,
                                      /*setbcast*/ true, true);
       }
@@ -373,7 +373,8 @@ void TestClient::audioThreadFn() {
           const double w = 2.0 * M_PI * videosync::toneFreqForTag(t) / srate;
           tonePhase_ += w;
           if (tonePhase_ > 2.0 * M_PI) tonePhase_ -= 2.0 * M_PI;
-          silenceL[i] = silenceR[i] = (float)(0.3 * std::sin(tonePhase_));
+          silenceR[i] = (float)(0.3 * std::sin(tonePhase_));
+          silenceL[i] = opts_.silentCh0 ? 0.f : silenceR[i] * opts_.ch0Gain;
         }
       }
       // frames delivered inside this AudioProc are shown at the end of this block
