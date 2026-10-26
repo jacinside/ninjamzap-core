@@ -43,6 +43,23 @@ public:
      * a test can arrange.
      */
     void simulateInputLossForTest() { m_simulateInputLoss.store(true, std::memory_order_relaxed); }
+
+    /**
+     * Feeds the previous callback's output back in as if it were the
+     * microphone: a perfect mic, hearing the metronome with no speaker, no
+     * air and no capture hardware in between.
+     *
+     * It exists so a test can ask what THIS code does to a musician's
+     * timing, separately from what the device does. The click leaves at a
+     * known interval position, and a receiver on the other side of a server
+     * can say where it arrived. The expected answer is one callback block,
+     * since the loop is a block long; anything beyond that is ours.
+     *
+     * It cannot see the device's own capture and playback delay, which is
+     * the larger number on most phones. A reading of zero here means the
+     * fault is not in this code, not that there is no fault.
+     */
+    void setInputLoopbackForTest(bool on) { m_inputLoopback.store(on, std::memory_order_relaxed); }
 #endif
 
     // Set the FX processor for local input effects
@@ -153,6 +170,9 @@ private:
 
 #ifndef NDEBUG
     std::atomic<bool> m_simulateInputLoss{false};
+    std::atomic<bool> m_inputLoopback{false};
+    float m_loopbackBuf[MAX_FRAMES] = {0};
+    int32_t m_loopbackFrames = 0;
 #endif
 
     /**

@@ -1,4 +1,7 @@
 #include "OboeEngine.h"
+#ifndef NDEBUG
+#include <sys/system_properties.h>
+#endif
 #include <chrono>
 #include <string>
 #include <sstream>
@@ -10,6 +13,23 @@
 
 OboeEngine::OboeEngine() {
     m_callback = std::make_shared<NinjamOboeCallback>();
+#ifndef NDEBUG
+    // Test microphone, switched on from the shell before the app connects:
+    //
+    //   adb shell setprop debug.ninjamzap.loopback 1
+    //
+    // A system property rather than a method on the JS bridge: the bridge is
+    // a generated contract shared with the branch the app ships from, and a
+    // test switch does not belong in it. It is also read here, in native
+    // code, so it does not depend on when React decides to build a module.
+    {
+        char prop[PROP_VALUE_MAX] = {0};
+        if (__system_property_get("debug.ninjamzap.loopback", prop) > 0 && prop[0] == '1') {
+            LOGI("test input loopback enabled by system property");
+            m_callback->setInputLoopbackForTest(true);
+        }
+    }
+#endif
     m_fxProcessor = std::make_unique<AudioFXProcessor>();
     m_recorder = std::make_unique<SessionRecorder>();
     m_callback->setFXProcessor(m_fxProcessor.get());

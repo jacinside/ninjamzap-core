@@ -204,6 +204,11 @@ public:
     }
 
     /** Test seam, debug builds only: makes the next input read see a loss. */
+    /** See NinjamOboeCallback::setInputLoopbackForTest. */
+    void setInputLoopbackForTest(bool on) {
+        if (m_callback) m_callback->setInputLoopbackForTest(on);
+    }
+
     void simulateInputLossForTest() {
         if (m_callback) m_callback->simulateInputLossForTest();
     }

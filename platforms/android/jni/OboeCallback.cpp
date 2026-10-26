@@ -128,6 +128,28 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
             readError = oboe::Result::ErrorDisconnected;
         }
 #endif
+    }
+
+#ifndef NDEBUG
+    // The test microphone. Replaces whatever the real one gave us with the
+    // last block this engine played, so the metronome goes back in exactly
+    // as a zero-latency mic in a silent room would have heard it.
+    if (m_inputLoopback.load(std::memory_order_relaxed)) {
+        const int32_t n = std::min(framesToProcess, m_loopbackFrames);
+        if (n > 0) {
+            memcpy(m_inLeft, m_loopbackBuf, n * sizeof(float));
+            memcpy(m_inRight, m_loopbackBuf, n * sizeof(float));
+        }
+        if (n < framesToProcess) {
+            memset(m_inLeft + n, 0, (framesToProcess - n) * sizeof(float));
+            memset(m_inRight + n, 0, (framesToProcess - n) * sizeof(float));
+        }
+        readCount = framesToProcess;
+        readError = oboe::Result::OK;
+    }
+#endif
+
+    if (inStream) {
         // Only the two errors that mean the stream is gone for good.
         // ErrorInvalidState deliberately does NOT belong here: the input is
         // started asynchronously and its pointer is published before
@@ -263,6 +285,16 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
     float prevR = m_outputPeakR.load(std::memory_order_relaxed);
     m_outputPeakL.store(newL > prevL ? newL : prevL * RELEASE, std::memory_order_relaxed);
     m_outputPeakR.store(newR > prevR ? newR : prevR * RELEASE, std::memory_order_relaxed);
+
+#ifndef NDEBUG
+    // Held for the next callback to read as its input. Taken before the
+    // interleave, from the same buffer the speaker gets, so the test hears
+    // what the musician hears.
+    if (m_inputLoopback.load(std::memory_order_relaxed)) {
+        m_loopbackFrames = std::min(framesToProcess, (int32_t)MAX_FRAMES);
+        memcpy(m_loopbackBuf, m_outLeft, m_loopbackFrames * sizeof(float));
+    }
+#endif
 
     // Interleave output for Oboe (stereo output stream)
     int32_t outputChannels = outputStream->getChannelCount();
