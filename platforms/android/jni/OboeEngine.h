@@ -204,6 +204,33 @@ public:
     }
 
     /** Test seam, debug builds only: makes the next input read see a loss. */
+    /** Test seams for the tuner warm-up; see NinjamOboeCallback. */
+    void setTunerWarmupMsForTest(int32_t ms) {
+        if (m_callback) m_callback->setTunerWarmupMsForTest(ms);
+    }
+    void setCallbackStallUsForTest(int32_t us) {
+        if (m_callback) m_callback->setCallbackStallUsForTest(us);
+    }
+    int32_t getTunerSuppressedCount() const {
+        return m_callback ? m_callback->getTunerSuppressedCount() : 0;
+    }
+
+    /** Current output queue depth in frames, and one hardware burst. */
+    int32_t getOutputBufferFrames() {
+        std::lock_guard<std::mutex> lock(m_streamMutex);
+        return m_outputStream ? m_outputStream->getBufferSizeInFrames() : 0;
+    }
+    int32_t getOutputBurstFrames() {
+        std::lock_guard<std::mutex> lock(m_streamMutex);
+        return m_outputStream ? m_outputStream->getFramesPerBurst() : 0;
+    }
+
+    /** Is the test microphone on? Exposed so a test can say so plainly
+     *  instead of failing for a reason nobody can see. */
+    bool isInputLoopbackOn() const {
+        return m_callback && m_callback->isInputLoopbackOn();
+    }
+
     /** See NinjamOboeCallback::setInputLoopbackForTest. */
     void setInputLoopbackForTest(bool on) {
         if (m_callback) m_callback->setInputLoopbackForTest(on);

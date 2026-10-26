@@ -60,6 +60,18 @@ public:
      * fault is not in this code, not that there is no fault.
      */
     void setInputLoopbackForTest(bool on) { m_inputLoopback.store(on, std::memory_order_relaxed); }
+
+    bool isInputLoopbackOn() const { return m_inputLoopback.load(std::memory_order_relaxed); }
+
+    /** Shortens the tuner warm-up so a test does not have to wait it out. */
+    void setTunerWarmupMsForTest(int32_t ms) { m_tunerWarmupMs.store(ms, std::memory_order_relaxed); }
+
+    /** Busy-waits this long inside every callback, which overruns the
+     *  deadline and makes the stream report xruns on demand. */
+    void setCallbackStallUsForTest(int32_t us) { m_stallUs.store(us, std::memory_order_relaxed); }
+
+    /** How many times the tuner was held back by the warm-up. */
+    int32_t getTunerSuppressedCount() const { return m_tunerSuppressed.load(std::memory_order_relaxed); }
 #endif
 
     // Set the FX processor for local input effects
@@ -88,7 +100,16 @@ public:
     // Output-buffer auto-tuner owned by OboeEngine; tune() is called at the
     // top of every output callback. nullptr = static buffer. See
     // OboeEngine::m_outputTuner.
-    void setLatencyTuner(oboe::LatencyTuner* tuner) { m_latencyTuner.store(tuner, std::memory_order_release); }
+    /**
+     * A new tuner means the streams were just (re)opened, which is another
+     * disruptive moment, so the warm-up starts again. Written from the thread
+     * that opens streams while the audio thread reads it, hence atomics.
+     */
+    void setLatencyTuner(oboe::LatencyTuner* tuner) {
+        m_firstCallbackMs.store(0, std::memory_order_relaxed);
+        m_tunerArmed.store(false, std::memory_order_relaxed);
+        m_latencyTuner.store(tuner, std::memory_order_release);
+    }
     int32_t getTunerGrowCount() const { return m_tunerGrowCount.load(std::memory_order_relaxed); }
     int32_t getInputShortReads() const { return m_inputShortReads.load(std::memory_order_relaxed); }
     int32_t getCallbackMaxMicros() const { return m_callbackMaxMicros.load(std::memory_order_relaxed); }
@@ -161,7 +182,20 @@ private:
 
     std::atomic<oboe::LatencyTuner*> m_latencyTuner{nullptr};
     int32_t m_lastTunedBufferSize = 0;   // audio thread only
+    static constexpr int32_t kTunerWarmupMs = 5000;
     std::atomic<int32_t> m_tunerGrowCount{0};   // times the output buffer grew (xrun-driven)
+
+    // Startup is the worst moment of a session to learn from: connecting and
+    // starting video is its CPU peak, and the tuner only ever grows, so an
+    // xrun in the first seconds costs latency for as long as the session
+    // lasts. Growth is therefore held back until things settle, and the
+    // tuner is re-baselined at the end so the startup xruns are forgotten
+    // rather than paid for with one late step.
+    std::atomic<int32_t> m_tunerWarmupMs{kTunerWarmupMs};
+    std::atomic<int32_t> m_tunerSuppressed{0};
+    std::atomic<int64_t> m_firstCallbackMs{0};
+    std::atomic<bool> m_tunerArmed{false};
+
     // Stream health (audio thread writes, UI thread reads). Short read = the
     // input delivered fewer frames than the output asked for (capture
     // overrun / drift); the tail is zero-filled, so it is an audible glitch
@@ -171,6 +205,7 @@ private:
 #ifndef NDEBUG
     std::atomic<bool> m_simulateInputLoss{false};
     std::atomic<bool> m_inputLoopback{false};
+    std::atomic<int32_t> m_stallUs{0};
     float m_loopbackBuf[MAX_FRAMES] = {0};
     int32_t m_loopbackFrames = 0;
 #endif

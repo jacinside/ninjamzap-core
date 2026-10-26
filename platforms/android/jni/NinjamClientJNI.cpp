@@ -1108,6 +1108,60 @@ Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetSlowRecovery(
 }
 
 /**
+ * Test seams, debug builds only, for the output tuner warm-up:
+ *   nativeSetTunerWarmupMs  — shorten the warm-up so a test need not wait.
+ *   nativeSetCallbackStallUs — overrun the callback deadline on demand, which
+ *                              is how a test makes the stream report xruns.
+ *   nativeGetTunerState     — [grows, suppressed, bufferFrames, burstFrames,
+ *                              inputLoopbackOn].
+ * All no-ops returning false/empty in release.
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetTunerWarmupMs(
+    JNIEnv* env, jobject thiz, jlong enginePtr, jint ms) {
+#ifndef NDEBUG
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return JNI_FALSE;
+    eng->setTunerWarmupMsForTest(ms);
+    return JNI_TRUE;
+#else
+    (void)enginePtr; (void)ms;
+    return JNI_FALSE;
+#endif
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeSetCallbackStallUs(
+    JNIEnv* env, jobject thiz, jlong enginePtr, jint us) {
+#ifndef NDEBUG
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    if (!eng) return JNI_FALSE;
+    eng->setCallbackStallUsForTest(us);
+    return JNI_TRUE;
+#else
+    (void)enginePtr; (void)us;
+    return JNI_FALSE;
+#endif
+}
+
+JNIEXPORT jintArray JNICALL
+Java_com_ninjamzap_app_nativeaudio_NinjamClientBridge_nativeGetTunerState(
+    JNIEnv* env, jobject thiz, jlong enginePtr) {
+    auto* eng = reinterpret_cast<OboeEngine*>(enginePtr);
+    jint vals[5] = {0, 0, 0, 0, 0};
+    if (eng) {
+        vals[0] = eng->getTunerGrowCount();
+        vals[1] = eng->getTunerSuppressedCount();
+        vals[2] = eng->getOutputBufferFrames();
+        vals[3] = eng->getOutputBurstFrames();
+        vals[4] = eng->isInputLoopbackOn() ? 1 : 0;
+    }
+    jintArray out = env->NewIntArray(5);
+    if (out) env->SetIntArrayRegion(out, 0, 5, vals);
+    return out;
+}
+
+/**
  * Test seam, debug builds only: makes the next input read see a device loss.
  * A no-op in release. Returns true when it actually ran.
  */

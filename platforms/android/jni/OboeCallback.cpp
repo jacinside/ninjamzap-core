@@ -74,13 +74,45 @@ oboe::DataCallbackResult NinjamOboeCallback::onAudioReady(
     // is the real-time thread; growth events are counted and surfaced via
     // getTunerGrowCount() for the metrics panel / periodic Kotlin log.
     if (auto* tuner = m_latencyTuner.load(std::memory_order_acquire)) {
-        tuner->tune();
-        int32_t bufSize = outputStream->getBufferSizeInFrames();
-        if (bufSize != m_lastTunedBufferSize) {
-            if (m_lastTunedBufferSize != 0) m_tunerGrowCount.fetch_add(1, std::memory_order_relaxed);
-            m_lastTunedBufferSize = bufSize;
+        // Hold the tuner back while the session starts up. Connecting and
+        // bringing video up is the CPU peak of the whole session, and the
+        // tuner only grows: an xrun in those first seconds buys latency that
+        // is then paid for until the musician leaves the room. Nobody is
+        // playing yet, so a glitch here costs far less than that.
+        const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            cbStart.time_since_epoch()).count();
+        int64_t first = m_firstCallbackMs.load(std::memory_order_relaxed);
+        if (first == 0) { first = nowMs; m_firstCallbackMs.store(first, std::memory_order_relaxed); }
+        const int32_t warmup = m_tunerWarmupMs.load(std::memory_order_relaxed);
+        const bool armed = m_tunerArmed.load(std::memory_order_relaxed);
+
+        if (!armed && (nowMs - first) < warmup) {
+            m_tunerSuppressed.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            if (!armed) {
+                m_tunerArmed.store(true, std::memory_order_relaxed);
+                // Re-baseline so the xruns counted during startup are
+                // forgotten rather than charged as one late growth step the
+                // first time tune() runs.
+                tuner->requestReset();
+            }
+            tuner->tune();
+            int32_t bufSize = outputStream->getBufferSizeInFrames();
+            if (bufSize != m_lastTunedBufferSize) {
+                if (m_lastTunedBufferSize != 0) m_tunerGrowCount.fetch_add(1, std::memory_order_relaxed);
+                m_lastTunedBufferSize = bufSize;
+            }
         }
     }
+
+#ifndef NDEBUG
+    // Overruns the callback deadline on demand so a test can make the stream
+    // report xruns without depending on the machine being busy.
+    if (const int32_t stallUs = m_stallUs.load(std::memory_order_relaxed)) {
+        const auto until = cbStart + std::chrono::microseconds(stallUs);
+        while (std::chrono::steady_clock::now() < until) { /* spin */ }
+    }
+#endif
 
     auto* outputBuffer = static_cast<float*>(audioData);
     int32_t framesToProcess = std::min(numFrames, MAX_FRAMES);
