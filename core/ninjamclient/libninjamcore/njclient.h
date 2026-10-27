@@ -122,6 +122,10 @@ public:
   int   config_debug_level; 
   int   config_play_prebuffer; // -1 means play instantly, 0 means play when full file is there, otherwise refers to how many
                                // bytes of compressed source to have before play. the default value is 4096.
+  // 1 (default): play a user's interval channels on the interval they were recorded in
+  // (alignUserChannels, docs/CHANNEL_ALIGNMENT.md). 0: per-channel queues, as before.
+  // Applies to receiving; senders always tag their interval GUIDs.
+  int   config_align_channels;
 
   float GetOutputPeak(int ch=-1);
 
@@ -153,6 +157,8 @@ public:
     m_test_hold_user.Set(user); m_test_hold_ch = ch; m_test_hold_swaps = swaps;
     m_users_cs.Leave();
   }
+  // Tests only: send random interval GUIDs, as clients without interval tags do.
+  void TestUntaggedGuids(bool on) { m_test_untagged_guids = on; }
 #endif
   char *GetUserState(int idx, float *vol=0, float *pan=0, bool *mute=0);
   void SetUserState(int idx, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute);
@@ -276,6 +282,8 @@ protected:
   void on_new_interval();
   void rejoinIntervalGrid(RemoteUser *user, int ch);
   int holdIntervalChannel(RemoteUser_Channel *chan, int swaps);
+  void alignUserChannels(RemoteUser *user);
+  void makeIntervalGuid(unsigned char *guid, unsigned int interval, int chidx);
   void writeUserChanLog(const char *lbl, RemoteUser *user, RemoteUser_Channel *chan, int chanidx);
 
   void writeLog(const char *fmt, ...);
@@ -298,6 +306,7 @@ protected:
 #ifdef NINJAMCORE_TEST_HOOKS
   WDL_String m_test_hold_user;
   int m_test_hold_ch = -1, m_test_hold_swaps = 0;
+  bool m_test_untagged_guids = false;
 #endif
 
   int m_in_auth;
@@ -311,6 +320,8 @@ protected:
   unsigned int m_session_pos_ms,m_session_pos_samples; // samples just keeps track of any samples lost to precision errors
 
   int m_loopcnt;
+  unsigned char m_interval_tag_session[6]; // shared by this client's interval GUIDs (see makeIntervalGuid)
+  bool m_interval_tag_session_set;
   int m_active_bpm, m_active_bpi;
   int m_interval_length;
   int m_metronome_state, m_metronome_tmp,m_metronome_interval;
@@ -387,8 +398,11 @@ protected:
     int pending_remaining;
     int sender_seq; // sender's m_sync_interval_cnt for this interval (from 24B marker, -1=unknown)
     int total_frames; // frames in this interval once its download ended (0 = still arriving); paces it
-    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), interval_seq(-1), active(false), pending_remaining(0), sender_seq(-1), total_frames(0) { username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
-    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; interval_seq = -1; active = false; pending_remaining = 0; sender_seq = -1; total_frames = 0; username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
+    // awaiting only: audio_guid is the GUID of this interval's own audio (it waits for
+    // channel alignment), so the video plays when that audio plays, not one swap later.
+    bool own_audio;
+    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), interval_seq(-1), active(false), pending_remaining(0), sender_seq(-1), total_frames(0), own_audio(false) { username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
+    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; interval_seq = -1; active = false; pending_remaining = 0; sender_seq = -1; total_frames = 0; own_audio = false; username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
     void copyFrom(const VideoRecvBuffer &src) {
       fourcc = src.fourcc; chidx = src.chidx; active = src.active; frameCount = src.frameCount;
       memcpy(username, src.username, sizeof(username));
@@ -406,6 +420,7 @@ protected:
       pending_remaining = src.pending_remaining;
       sender_seq = src.sender_seq;
       total_frames = src.total_frames;
+      own_audio = src.own_audio;
     }
   };
 

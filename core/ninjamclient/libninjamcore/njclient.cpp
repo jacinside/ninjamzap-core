@@ -563,6 +563,25 @@ static bool strtoguid(const char *str, unsigned char *guid)
   return true;
 }
 
+// Interval GUIDs that say which interval they were recorded in. An interval-mode
+// channel's GUID is otherwise random, so a receiver can't tell which of a user's
+// channels belong together, and each channel's queue drifts on its own (a muted
+// channel only becomes playable at the interval's END, a loud one after its first
+// upload block). Layout (docs/CHANNEL_ALIGNMENT.md §2): [0..1] random [2..7] session
+// (random, per connection) [8..11] interval number (big-endian) [12..13] 'N','Z'
+// [14] version 1 [15] channel. The leading random bytes keep GUID prefixes (logs,
+// archive directories) distinct. Still unique per channel and opaque to other
+// clients and to the server.
+static const unsigned char kIntervalTagMagic0='N', kIntervalTagMagic1='Z', kIntervalTagVersion=1;
+static const int kIntervalTagSession=2, kIntervalTagSessionLen=6;
+
+static bool intervalGuidTag(const unsigned char *g, unsigned int *interval)
+{
+  if (g[12]!=kIntervalTagMagic0 || g[13]!=kIntervalTagMagic1 || g[14]!=kIntervalTagVersion) return false;
+  if (interval) *interval=((unsigned int)g[8]<<24)|((unsigned int)g[9]<<16)|((unsigned int)g[10]<<8)|g[11];
+  return true;
+}
+
 static char *guidtostr_tmp(unsigned char *guid)
 {
   static char tmp[64];
@@ -683,7 +702,9 @@ NJClient::NJClient()
   config_masterpan=0.0f;
   config_mastermute=false;
   config_play_prebuffer=DEFAULT_CONFIG_PREBUFFER;
+  config_align_channels=1;
   m_sync_interval_cnt=0;
+  m_interval_tag_session_set=false;
 
 
   LicenseAgreement_User=0;
@@ -1092,6 +1113,7 @@ void NJClient::Disconnect()
 void NJClient::Connect(char *host, char *user, char *pass)
 {
   Disconnect();
+  m_interval_tag_session_set=false; // a new session id per connection (makeIntervalGuid)
 
   m_session_pos_ms=m_session_pos_samples=0;
 
@@ -1956,6 +1978,11 @@ int NJClient::Run() // nonzero if sleep ok
           lc->m_need_header=false;
           {
             WDL_RNG_bytes(lc->m_curwritefile.guid,sizeof(lc->m_curwritefile.guid));
+            bool tagGuid = !(lc->flags&(2|4));
+#ifdef NINJAMCORE_TEST_HOOKS
+            if (m_test_untagged_guids) tagGuid = false;
+#endif
+            if (tagGuid) makeIntervalGuid(lc->m_curwritefile.guid,(unsigned int)(long long)blockstarttime,lc->channel_idx);
             char guidstr[64];
             guidtostr(lc->m_curwritefile.guid,guidstr);
             if (!(lc->flags&4)) writeLog("local %s %d%s\n",guidstr,lc->channel_idx,(lc->flags&2)?"v":"");
@@ -2580,7 +2607,7 @@ void NJClient::process_samples(float **inbuf, int innch, float **outbuf, int out
 
       if (lc->bcast_active) 
       {
-        lc->m_bq.AddBlock(sc_nch,0.0,src,len,src2);
+        lc->m_bq.AddBlock(sc_nch,(double)(unsigned int)m_loopcnt,src,len,src2); // startpos: the interval recorded in (see makeIntervalGuid)
         lc->m_curwritefile_curbuflen += len;
       }
     }
@@ -3206,6 +3233,7 @@ void NJClient::rejoinIntervalGrid(RemoteUser *user, int ch)
   RemoteUser_Channel *chan=&user->channels[ch];
   if (chan->flags & (2|4)) { chan->rejoin_grid=0; return; }
   if (!chan->ds) return; // nothing to place yet
+  if (config_align_channels && intervalGuidTag(chan->ds->guid,NULL)) { chan->rejoin_grid=0; return; } // alignUserChannels places it
   const char *uname=user->name.Get(), *at=strchr(uname,'@');
   const int unameLen = at ? (int)(at-uname) : (int)strlen(uname);
   RemoteUser_Channel *ref=NULL;
@@ -3272,6 +3300,117 @@ void NJClient::rejoinIntervalGrid(RemoteUser *user, int ch)
   const int held = holdIntervalChannel(chan, pos);
   SYNCLOG("audio REJOIN: user=%.*s ch=%d wanted=%d hold=%d nearest=%d (%+.0f ms by %s)",
     unameLen, uname, ch, pos, held, near, nearD, byEnd ? "END" : "BEGIN");
+}
+
+void NJClient::makeIntervalGuid(unsigned char *guid, unsigned int interval, int chidx)
+{
+  if (!m_interval_tag_session_set)
+  {
+    WDL_RNG_bytes(m_interval_tag_session,sizeof(m_interval_tag_session));
+    m_interval_tag_session_set=true;
+  }
+  // [0..1] stay random
+  memcpy(guid+kIntervalTagSession,m_interval_tag_session,kIntervalTagSessionLen);
+  guid[8]=(unsigned char)(interval>>24); guid[9]=(unsigned char)(interval>>16);
+  guid[10]=(unsigned char)(interval>>8); guid[11]=(unsigned char)interval;
+  guid[12]=kIntervalTagMagic0; guid[13]=kIntervalTagMagic1; guid[14]=kIntervalTagVersion;
+  guid[15]=(unsigned char)chidx;
+}
+
+// Plays a user's interval channels on the same sender interval, the way the video is
+// matched to the audio interval named in its marker (docs/VIDEO_SYNC.md §6);
+// docs/CHANNEL_ALIGNMENT.md §3. Called after the swap, under m_users_cs. Senders that
+// tag their interval GUIDs (makeIntervalGuid) only; others keep the per-channel
+// queues (and rejoinIntervalGrid).
+// Target: the earliest interval any of the channels plays, so a channel whose
+// download became playable late (silence, a quiet or gated input, a slow link) is
+// waited for, never dropped. When every channel behind already has the latest
+// interval queued, they skip forward to it instead, so corrections don't add an
+// interval of delay each time (a channel that keeps waiting overflows its queue).
+// A channel ahead of the target waits one swap (silent, its ds kept). Held, live
+// (voice chat), session and video channels, channels with nothing to play and
+// untagged downloads (the rest of an interval that started in voice chat) are left
+// out: they join at a later swap.
+void NJClient::alignUserChannels(RemoteUser *user)
+{
+  int chs[MAX_USER_CHANNELS];
+  unsigned int iv[MAX_USER_CHANNELS];
+  int n=0, untagged=0;
+  const unsigned char *session=NULL;
+  const char *uname=user->name.Get(), *at=strchr(uname,'@');
+  const int unameLen = at ? (int)(at-uname) : (int)strlen(uname);
+  for (int ch = 0; ch < MAX_USER_CHANNELS; ch ++)
+  {
+    RemoteUser_Channel *c=&user->channels[ch];
+    if ((c->flags & (0x10|2|4)) || !c->ds || c->hold_swaps > 0) continue;
+    if (!((user->submask & user->chanpresentmask) & (1<<ch))) continue;
+    unsigned int t;
+    if (!intervalGuidTag(c->ds->guid,&t)) { untagged++; continue; }
+    if (!session) session=c->ds->guid;
+    else if (memcmp(session+kIntervalTagSession,c->ds->guid+kIntervalTagSession,kIntervalTagSessionLen))
+      return; // a reconnect mid-swap: wait for one session
+    chs[n]=ch; iv[n]=t; n++;
+  }
+  if (n < 2)
+  {
+    if (untagged)
+      SYNCLOG("audio ALIGN off: user=%.*s untagged=%d (sender without interval tags)", unameLen, uname, untagged);
+    return;
+  }
+  unsigned int lo=iv[0], hi=iv[0];
+  for (int i = 1; i < n; i ++)
+  {
+    if ((int)(iv[i]-lo) < 0) lo=iv[i];
+    if ((int)(iv[i]-hi) > 0) hi=iv[i];
+  }
+  if (lo == hi)
+  {
+    SYNCLOG("audio ALIGN ok: user=%.*s channels=%d interval=%u", unameLen, uname, n, lo);
+    return;
+  }
+  bool skip=true;
+  for (int i = 0; i < n && skip; i ++)
+  {
+    if (iv[i] == hi) continue;
+    RemoteUser_Channel *c=&user->channels[chs[i]];
+    bool queued=false;
+    for (int q = 0; q < 2 && !queued; q ++)
+    {
+      unsigned int t;
+      queued = c->next_ds[q] && intervalGuidTag(c->next_ds[q]->guid,&t) && t == hi;
+    }
+    if (!queued) skip=false;
+  }
+  const unsigned int target = skip ? hi : lo;
+  for (int i = 0; i < n; i ++)
+  {
+    RemoteUser_Channel *c=&user->channels[chs[i]];
+    const int d=(int)(iv[i]-target);
+    if (d < 0)
+    {
+      // behind, with the target queued: drop the older intervals before it
+      int dropped=0;
+      unsigned int t=iv[i];
+      while (c->ds && intervalGuidTag(c->ds->guid,&t) && (int)(t-target) < 0)
+      {
+        delete c->ds;
+        c->ds=c->next_ds[0];
+        c->next_ds[0]=c->next_ds[1];
+        c->next_ds[1]=0;
+        dropped++;
+      }
+      SYNCLOG("audio ALIGN: user=%.*s ch=%d interval=%u target=%u skipped=%d",
+        unameLen, uname, chs[i], iv[i], target, dropped);
+    }
+    else if (d > 0)
+    {
+      // ahead: wait one swap with this interval kept, if one more arrival fits
+      // (a full queue would overwrite its last entry: RemoteDownload::startPlaying)
+      if (!c->next_ds[1]) c->hold_swaps=1;
+      SYNCLOG("audio ALIGN: user=%.*s ch=%d interval=%u target=%u hold=%d",
+        unameLen, uname, chs[i], iv[i], target, c->hold_swaps);
+    }
+  }
 }
 
 // Holds ds, unplayed, for up to `swaps` swaps; returns the swaps applied. The queue
@@ -3357,6 +3496,7 @@ void NJClient::on_new_interval()
         }
       }
     }
+    if (config_align_channels) alignUserChannels(user);
     for (ch = 0; ch < MAX_USER_CHANNELS; ch ++)
       if (user->channels[ch].rejoin_grid) rejoinIntervalGrid(user, ch);
 #ifdef NINJAMCORE_TEST_HOOKS
@@ -3505,7 +3645,17 @@ void NJClient::on_new_interval()
       VideoRecvBuffer &aw = vs->awaiting[0];
       const int pos = audioQueuePosition(vs->stream_username, aw.audio_guid);
       if (pos > 0) break; // still queued: keep it, and everything behind it
-      if (pos == 0) {
+      if (pos == 0 && aw.own_audio) {
+        // its own audio plays from this swap: play now (like a PREV match)
+        SYNCLOG("SWAP#%d video PLAY: key=%s match=ALIGNED vidSeq=%d frames=%d vid=%02x%02x (immediate → playing)",
+          m_sync_interval_cnt, vs->key, aw.sender_seq, aw.frameCount, aw.audio_guid[0], aw.audio_guid[1]);
+        vs->synced = true;
+        vs->last_played_sender_seq = aw.sender_seq;
+        memcpy(vs->last_played_audio_guid, aw.audio_guid, 16);
+        vs->playing.reset();
+        vs->playing.copyFrom(aw);
+        vs->frame_idx = 0;
+      } else if (pos == 0) {
         SYNCLOG("SWAP#%d video PLAY: key=%s match=QUEUED vidSeq=%d frames=%d vid=%02x%02x (deferred → pending)",
           m_sync_interval_cnt, vs->key, aw.sender_seq, aw.frameCount, aw.audio_guid[0], aw.audio_guid[1]);
         vs->synced = true;
@@ -3545,9 +3695,28 @@ void NJClient::on_new_interval()
 
       DecodeState *senderDs = NULL;
       int matchType = 0; // 0=none, 1=ds, 2=prev
+      // The audio this video belongs to (interval m+1 of the marker's interval m) or
+      // the marker's own audio waits this swap (alignUserChannels): the video waits too.
+      bool audioWaits = false;
+      unsigned char waitGuid[16]; // the waiting audio of this video's own interval (m+1)
+      memset(waitGuid, 0, 16);
+      unsigned int markerInterval = 0;
+      const bool markerTagged = hasGuid && intervalGuidTag(videoAudioGuid, &markerInterval);
       for (int ui = 0; ui < m_remoteusers.GetSize(); ui++) {
         RemoteUser *ru = m_remoteusers.Get(ui);
         if (!ru || strcmp(ru->name.Get(), vs->next.username)) continue;
+        if (markerTagged)
+          for (int ci = 0; ci < MAX_USER_CHANNELS && !audioWaits; ci++) {
+            RemoteUser_Channel *rc = &ru->channels[ci];
+            unsigned int t;
+            if (!(rc->flags & 0x10) && rc->hold_swaps > 0 && rc->ds && intervalGuidTag(rc->ds->guid, &t) &&
+                (t == markerInterval || t == markerInterval + 1) &&
+                !memcmp(rc->ds->guid + kIntervalTagSession, videoAudioGuid + kIntervalTagSession, kIntervalTagSessionLen))
+            {
+              audioWaits = true;
+              if (t == markerInterval + 1) memcpy(waitGuid, rc->ds->guid, 16);
+            }
+          }
         // Scan ALL channels (not just channel 0): some implementations
         // (e.g. JamWide) legitimately broadcast audio on non-zero channel
         // indices to keep the video slot free of audio. Prefer a channel
@@ -3606,7 +3775,28 @@ void NJClient::on_new_interval()
       // more than one interval late. Then the video has to wait for it too.
       const int queuedPos = (audioHasData && hasGuid && !guidMatch) ?
                             audioQueuePosition(vs->next.username, videoAudioGuid) : -1;
-      if (!audioHasData) {
+      if (audioWaits) {
+        // Not a mismatch: its audio waits this swap for the user's other channels.
+        // Keep the video in awaiting (a BEGIN would discard `next`), keyed to its own
+        // audio when known, so it plays when that audio does.
+        if (vs->awaiting_count == 2) {
+          SYNCLOG("SWAP#%d video AWAIT-DROP: key=%s vidSeq=%d (awaiting full)",
+            m_sync_interval_cnt, vs->key, vs->awaiting[0].sender_seq);
+          vs->awaiting[0].reset();
+          vs->awaiting[0].copyFrom(vs->awaiting[1]);
+          vs->awaiting[1].reset();
+          vs->awaiting_count = 1;
+        }
+        VideoRecvBuffer &slot = vs->awaiting[vs->awaiting_count++];
+        slot.reset();
+        slot.copyFrom(vs->next);
+        bool own = false;
+        for (int gi = 0; gi < 16 && !own; gi++) own = waitGuid[gi] != 0;
+        if (own) { memcpy(slot.audio_guid, waitGuid, 16); slot.own_audio = true; }
+        SYNCLOG("SWAP#%d video AWAIT: key=%s (audio aligning) vidSeq=%d vid=%02x%02x own=%d",
+          m_sync_interval_cnt, vs->key, videoSenderSeq, slot.audio_guid[0], slot.audio_guid[1], own ? 1 : 0);
+        vs->next.reset();
+      } else if (!audioHasData) {
         vs->hold_count = 0;
         vs->empty_count = 0;
         SYNCLOG("SWAP#%d video HOLD: key=%s (no audio) vidSeq=%d", m_sync_interval_cnt, vs->key, videoSenderSeq);
@@ -3693,8 +3883,11 @@ void NJClient::on_new_interval()
         }
         vs->next.reset();
       }
-      if (senderDs) memcpy(vs->prev_ds_guid, senderDs->guid, 16);
-      else memset(vs->prev_ds_guid, 0, 16);
+      // While the audio waits, prev keeps the interval that played before it.
+      if (!audioWaits) {
+        if (senderDs) memcpy(vs->prev_ds_guid, senderDs->guid, 16);
+        else memset(vs->prev_ds_guid, 0, 16);
+      }
     } else if (vs->accumulating.active && vs->accumulating.frameCount >= 1) {
       // Accumulating-fallback only fires when next is empty but accumulating already has
       // frames before END arrives. This path bypasses the GUID match and so can introduce
