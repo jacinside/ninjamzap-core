@@ -1,5 +1,6 @@
 #include "TestClient.h"
 
+#include <algorithm>
 #include <cstdlib>
 
 #include <cstdio>
@@ -79,6 +80,14 @@ bool TestClient::connectAndJoin(std::chrono::milliseconds timeout) {
       if (opts_.sendAudio) {
         client_->SetLocalChannelInfo(0, "audio",
                                      /*setsrcch*/ true, opts_.ch0Stereo ? 1024 : 0,
+                                     /*setbitrate*/ true, opts_.audioBitrate,
+                                     /*setbcast*/ true, true);
+      }
+      for (int c = 0; c < opts_.toneChannels; ++c) {
+        char nm[16];
+        std::snprintf(nm, sizeof nm, "audio%d", c + 1);
+        client_->SetLocalChannelInfo(c, nm,
+                                     /*setsrcch*/ true, c,
                                      /*setbitrate*/ true, opts_.audioBitrate,
                                      /*setbcast*/ true, true);
       }
@@ -340,7 +349,11 @@ void TestClient::audioThreadFn() {
   std::vector<float> silenceR(block, 0.0f);
   std::vector<float> outL(block, 0.0f);
   std::vector<float> outR(block, 0.0f);
-  float *inbuf[2] = {silenceL.data(), silenceR.data()};
+  float *inbuf[kMaxToneChannels] = {silenceL.data(), silenceR.data()};
+  const int nIn = std::max(2, opts_.toneChannels);
+  std::vector<std::vector<float>> chIn(nIn, std::vector<float>(block, 0.0f));
+  if (opts_.toneChannels > 0)
+    for (int c = 0; c < nIn; ++c) inbuf[c] = chIn[c].data();
   float *outbuf[2] = {outL.data(), outR.data()};
 
   // Realtime pacing: sleep for `block/srate` between calls so on_new_interval()
@@ -361,7 +374,25 @@ void TestClient::audioThreadFn() {
       if (!catchup) next = std::chrono::steady_clock::now();
     }
     if (joined_.load()) {
-      if (opts_.toneInput) {
+      if (opts_.toneChannels > 0) {
+        int pos = 0, len = 0;
+        client_->GetPosition(&pos, &len);
+        const int boundary = (len > 0 && pos >= 0 && len - pos < block) ? len - pos : block;
+        const int tag = currentSwap_.load();
+        const uint32_t silent = silentMask_.load(std::memory_order_relaxed);
+        for (int c = 0; c < opts_.toneChannels; ++c) {
+          const float g = (silent & (1u << c)) ? 0.f : 0.08f * chGain_[c].load(std::memory_order_relaxed);
+          const float gate = chGateFrom_[c].load(std::memory_order_relaxed);
+          for (int i = 0; i < block; ++i) {
+            const int t = i < boundary ? tag : tag + 1;
+            const int at = i < boundary ? pos + i : i - boundary; // sample within its interval
+            const bool gated = gate > 0.f && len > 0 && at < gate * len;
+            chPhase_[c] += 2.0 * M_PI * toneFreqFor(c, t) / srate;
+            if (chPhase_[c] > 2.0 * M_PI) chPhase_[c] -= 2.0 * M_PI;
+            chIn[c][i] = gated ? 0.f : g * (float)std::sin(chPhase_[c]);
+          }
+        }
+      } else if (opts_.toneInput) {
         // Tag each input sample with the interval it's recorded in; the interval
         // boundary inside this block (if any) is where AudioProc will swap.
         int pos = 0, len = 0;
@@ -379,7 +410,7 @@ void TestClient::audioThreadFn() {
       }
       // frames delivered inside this AudioProc are shown at the end of this block
       if (opts_.recordOutput) blockEndSample_.store(outCount_ + block);
-      client_->AudioProc(inbuf, 2, outbuf, 2, block, srate,
+      client_->AudioProc(inbuf, opts_.toneChannels > 0 ? nIn : 2, outbuf, 2, block, srate,
                          /*justmonitor*/ false, /*isPlaying*/ true,
                          /*isSeek*/ false, /*cursessionpos*/ -1.0);
       if (opts_.recordOutput) {

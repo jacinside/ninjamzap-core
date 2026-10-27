@@ -73,6 +73,10 @@ public:
     bool silentCh0 = false;
     float ch0Gain = 1.f; // with toneInput: ch0 tone level relative to ch1
     bool ch0Stereo = false; // ch0 takes inputs L+R (stereo) instead of L (mono)
+    // > 0: N interval-mode audio channels 0..N-1 (input i -> channel i), each tagged
+    // in its own band (toneFreqFor). Replaces sendAudio/extraAudioChannel/toneInput's
+    // two-channel layout; put the video on videoChannel >= N.
+    int toneChannels = 0;
     // Keep every output sample (L/R) for content checks (ToneTag.h).
     bool recordOutput = false;
   };
@@ -115,6 +119,15 @@ public:
   // received meanwhile, then everything queued in the socket is processed in a
   // burst — a congested or briefly dropped connection.
   void stallNetwork(int ms) { netStallMs_.store(ms); }
+  // toneChannels: channel ch sends digital silence (mute / fader at 0) or its tone.
+  void setChannelSilent(int ch, bool on) {
+    if (on) silentMask_.fetch_or(1u << ch); else silentMask_.fetch_and(~(1u << ch));
+  }
+  // toneChannels: channel ch's tone level (0..1, 1 = default).
+  void setChannelGain(int ch, float g) { chGain_[ch].store(g); }
+  // toneChannels: channel ch is silent for the first `from` fraction of every
+  // interval and plays its tone after it (a gated input that only sounds late).
+  void setChannelGate(int ch, float from) { chGateFrom_[ch].store(from); }
 
   // Puts local audio channel `ch` in NINJAM voice-chat mode (flags |= 2) or back
   // in interval mode, and tells the server — what the app's voice-chat toggle does.
@@ -183,6 +196,10 @@ private:
   std::atomic<bool> joined_{false};
   std::atomic<int> stallMs_{0};
   std::atomic<int> netStallMs_{0};
+  std::atomic<uint32_t> silentMask_{0};
+  std::atomic<float> chGain_[8] = {1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f};
+  std::atomic<float> chGateFrom_[8] = {};
+  double chPhase_[8] = {};
   std::atomic<bool> videoChannelRegistered_{false};
   std::atomic<int> currentSwap_{0};
   std::atomic<int> swapCallbackCount_{0};

@@ -30,6 +30,7 @@
 #include "TestClient.h"
 #include "TestEnv.h"
 #include "ToneTag.h"
+#include "njclient.h"
 
 using namespace std::chrono_literals;
 
@@ -113,6 +114,7 @@ RunResult runPlan(videosync::TestClient &sender, videosync::TestClient &receiver
       const Step &s = plan[next++];
       if (s.voiceChat == 2) {
         r.offTag = sender.currentSwap();
+        if (r.firstOffTag < 0) r.firstOffTag = r.offTag;
         std::fprintf(stderr, "[scenario34] t=%dms mark at sender swap %d\n", nowMs, r.offTag);
       } else if (s.voiceChat >= 0) {
         sender.setVoiceChat(0, s.voiceChat == 1, !s.notifyAfterBoundary);
@@ -516,12 +518,15 @@ int badSteps(const std::vector<int> &seq) {
   return bad;
 }
 
+// untagged: the sender sends random interval GUIDs (clients without interval tags),
+// so nothing realigns the channels after the hold.
 void runHoldCase(const char *name, const std::string &prefix, int stallFirstMs, int request,
-                 int expectHold) {
+                 int expectHold, bool untagged) {
   auto &log = videosync::SyncLogCapture::instance();
   log.clear();
   videosync::TestClient sender(makeOpts("anonymous:" + prefix + "_sender", true));
   videosync::TestClient receiver(makeOpts("anonymous:" + prefix + "_recv", false));
+  if (untagged) sender.raw()->TestUntaggedGuids(true);
   REQUIRE(sender.connectAndJoin(8s));
   REQUIRE(receiver.connectAndJoin(8s));
   waitForSwaps(sender, receiver);
@@ -560,10 +565,13 @@ void runHoldCase(const char *name, const std::string &prefix, int stallFirstMs, 
   std::fprintf(stderr, "\n");
 
   CHECK(hold == expectHold);
-  CHECK(badSteps(l) == 0);
+  // untagged: a hold never reorders or drops audio. Tagged: ch0, held behind ch1,
+  // rejoins it (alignUserChannels), which may skip one interval.
+  CHECK(badSteps(l) <= (untagged ? 0 : expectHold));
   CHECK(badSteps(r) == 0);
-  // after the hold, ch0 plays `hold` intervals behind ch1, steadily
-  const int want = (videosync::kToneTags - hold) % videosync::kToneTags;
+  // After the hold: untagged, ch0 plays `hold` intervals behind ch1, steadily; tagged,
+  // alignUserChannels puts them back on the same interval.
+  const int want = untagged ? (videosync::kToneTags - hold) % videosync::kToneTags : 0;
   CHECK(diff.size() == 1);
   CHECK(diff.count(want) == 1);
 }
@@ -572,12 +580,17 @@ void runHoldCase(const char *name, const std::string &prefix, int stallFirstMs, 
 
 TEST_CASE("34e_hold_capped — a 2-swap hold is capped to 1, no reorder or drop",
           "[sync][scenario34]") {
-  runHoldCase("scenario34e", "vc34e", 0, 2, 1);
+  runHoldCase("scenario34e", "vc34e", 0, 2, 1, true);
+}
+
+TEST_CASE("34h_hold_realigned — tagged interval GUIDs: the channels realign after a hold",
+          "[sync][scenario34]") {
+  runHoldCase("scenario34h", "vc34h", 0, 2, 1, false);
 }
 
 TEST_CASE("34f_hold_with_queued_interval — no hold when an interval is already queued",
           "[sync][scenario34]") {
-  runHoldCase("scenario34f", "vc34f", 1500, 1, 0);
+  runHoldCase("scenario34f", "vc34f", 1500, 1, 0, true);
 }
 
 // The receiver turns ch1's receive off and on again after 34d's voice-chat OFF
@@ -636,6 +649,8 @@ TEST_CASE("36_manual_toggles", "[.][scenario36]") {
   gWholeRun = true;
   // NJ_CH0_MUTED: the voice-chat channel is muted (sends silence) while it toggles.
   gSilentCh0 = std::getenv("NJ_CH0_MUTED") != nullptr;
+  // NJ_CH0_GAIN: a quiet mic (e.g. 0.03) fills its first upload block late in the interval.
+  if (std::getenv("NJ_CH0_GAIN")) gCh0Gain = (float)std::atof(std::getenv("NJ_CH0_GAIN"));
   const double at[] = {0.10, 0.45, 0.80, 0.25, 0.60, 0.95, 0.35, 0.70};
   std::vector<Step> plan;
   int t = 3 * I;
@@ -645,5 +660,36 @@ TEST_CASE("36_manual_toggles", "[.][scenario36]") {
   }
   std::fprintf(stderr, "[%s] interval=%dms ch0=%s phase=%dms\n", prefix.c_str(), I,
                gCh0Stereo ? "stereo" : "mono", gRecvPhaseMs);
+  runCase(prefix.c_str(), prefix, plan, t + 3 * I);
+}
+
+// 37: no voice chat at all. Two local channels (ch0 a quiet mic via NJ_CH0_GAIN, ch1
+// loud), real interval, and short network hiccups on the sender and the receiver at
+// different points of the interval. Content checked for every interval from the start:
+// do the user's channels stay on the same sender interval?
+TEST_CASE("37_no_voice_chat_jitter", "[.][scenario37]") {
+  const int I = kIntervalMs;
+  gRecvPhaseMs = std::getenv("NJ_REAL_PHASE_MS") ? std::atoi(std::getenv("NJ_REAL_PHASE_MS")) : I / 2;
+  const char *pf = std::getenv("NJ_REAL_PREFIX");
+  const std::string prefix = pf ? pf : "m37";
+  gWholeRun = true;
+  if (std::getenv("NJ_CH0_GAIN")) gCh0Gain = (float)std::atof(std::getenv("NJ_CH0_GAIN"));
+  // NJ_CH0_MUTED: ch0 sends digital silence (the app's M button or fader at 0 -> send gain 0).
+  gSilentCh0 = std::getenv("NJ_CH0_MUTED") != nullptr;
+  std::vector<Step> plan;
+  plan.push_back({I, 2, 0, 0});
+  // {at fraction of the interval, sender net stall, receiver net stall}
+  const struct { double at; int snd, rcv; } hic[] = {
+    {0.05, 800, 0}, {0.90, 0, 1200}, {0.30, 2500, 0}, {0.98, 0, 600},
+    {0.02, 1500, 0}, {0.60, 0, 2500}, {0.95, 400, 400}, {0.10, 0, 1800}};
+  int t = 3 * I;
+  const bool noHiccups = std::getenv("NJ_NO_HICCUPS") != nullptr;
+  for (const auto &h : hic) {
+    if (noHiccups) { t += 2 * I; continue; }
+    plan.push_back({t - (t % I) + (int)(h.at * I), -1, 0, 0, h.snd, h.rcv});
+    t += 2 * I;
+  }
+  std::fprintf(stderr, "[%s] interval=%dms ch0Gain=%.3f phase=%dms\n", prefix.c_str(), I,
+               gCh0Gain, gRecvPhaseMs);
   runCase(prefix.c_str(), prefix, plan, t + 3 * I);
 }

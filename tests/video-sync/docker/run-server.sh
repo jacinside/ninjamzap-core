@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Boots ninjamzap-server-test image with the fast-interval test.cfg mounted.
+# Boots ninjamzap-server-test image with the fast-interval test.cfg mounted
+# (NJ_TEST_CFG: another config in this directory, e.g. test-multi.cfg).
 # Prints the host port on stdout. Caller is expected to docker rm -f the container.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NAME="${NJ_TEST_NAME:-nzs-test-$$}"
 IMAGE="${NJ_TEST_IMAGE:-ninjamzap-server-test:latest}"
+CFG="${NJ_TEST_CFG:-test.cfg}"
 
 # The image's entrypoint renders the production configs from Fly secrets;
 # bypass it and run ninjamsrv directly on the mounted test.cfg.
@@ -14,7 +16,7 @@ docker run --rm -d \
   -p 0:2049 \
   -w /opt/ninjam \
   --entrypoint ninjamsrv \
-  -v "$SCRIPT_DIR/test.cfg:/opt/ninjam/test.cfg:ro" \
+  -v "$SCRIPT_DIR/$CFG:/opt/ninjam/test.cfg:ro" \
   "$IMAGE" test.cfg >/dev/null
 
 # Wait until port mapping is available (immediate in practice).

@@ -6,6 +6,7 @@
 # Usage:
 #   make            # build
 #   make test       # build + run all scenarios (boots server in Docker)
+#   make test-real  # build + run the real-interval scenarios (run-real.sh, ~8 min)
 #   make clean
 
 # `?=` would not override make's built-in defaults (c++/cc), so only replace
@@ -74,7 +75,7 @@ CATCH_OBJ := $(BUILD)/vendor/catch_amalgamated.o
 ALL_OBJS := $(CORE_CPP_OBJS) $(CORE_C_OBJS) $(HARNESS_OBJS) $(SCEN_OBJS) $(CATCH_OBJ)
 
 # --- Targets -------------------------------------------------------------
-.PHONY: all clean test
+.PHONY: all clean test test-real
 
 all: video_sync_tests
 
@@ -123,6 +124,9 @@ clean:
 
 # Boots ninjamzap-server-test container, exports NJ_TEST_PORT, runs binary.
 # Catch2 arguments go in TEST_ARGS, e.g. make test TEST_ARGS='"[scenario8]"'.
+test-real: video_sync_tests
+	./run-real.sh
+
 test: video_sync_tests
 	@OUT=$$(./docker/run-server.sh) && \
 	  NAME=$$(echo "$$OUT" | awk '{print $$1}') && \

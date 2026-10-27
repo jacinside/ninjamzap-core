@@ -6,3 +6,4 @@ video_sync_tests
 video-sync.log
 rerun-*.log
 video-sync-junit.xml
+real-logs/
