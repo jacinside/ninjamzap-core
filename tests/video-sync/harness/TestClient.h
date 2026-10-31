@@ -79,6 +79,10 @@ public:
     int toneChannels = 0;
     // Keep every output sample (L/R) for content checks (ToneTag.h).
     bool recordOutput = false;
+    // NJClient::config_late_start_guard_ms. Off by default: clients on one host start
+    // their intervals within milliseconds of each other, which the guard would hold on
+    // every join; scenarios that test it turn it on.
+    double lateStartGuardMs = 0.0;
   };
 
   explicit TestClient(Options opts);

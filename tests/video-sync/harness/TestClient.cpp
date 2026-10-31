@@ -35,6 +35,7 @@ TestClient::TestClient(Options opts) : opts_(std::move(opts)) {
   client_->config_savelocalaudio = 0;
   client_->config_autosubscribe = 1;
   client_->config_metronome_mute = true;
+  client_->config_late_start_guard_ms = opts_.lateStartGuardMs;
   // Optional verbose RECV BLOCK printouts on stderr — surfaces every WRITE arrival.
   if (std::getenv("NJ_TEST_DEBUG")) client_->config_debug_level = 2;
   client_->RawData_Callback = &TestClient::rawDataCb;

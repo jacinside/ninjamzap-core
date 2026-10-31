@@ -339,6 +339,9 @@ class RemoteUser_Channel
     int rejoin_grid;
     // Swaps that ds waits, unplayed, before it starts (set by rejoinIntervalGrid).
     int hold_swaps;
+    // Output samples played as silence since playback caught up with a download still
+    // streaming in (0 = playing fine). Logged as audio STARVE.
+    double starve_samples;
 
     double decode_peak_vol[2];
 
@@ -702,6 +705,7 @@ NJClient::NJClient()
   config_masterpan=0.0f;
   config_mastermute=false;
   config_play_prebuffer=DEFAULT_CONFIG_PREBUFFER;
+  config_late_start_guard_ms=1500.0;
   config_align_channels=1;
   m_sync_interval_cnt=0;
   m_interval_tag_session_set=false;
@@ -3098,6 +3102,13 @@ void NJClient::mixInChannel(RemoteUser *user, int chanidx,
 
   if (codecavail>0 && codecavail >= needed*srcnch)
   {
+    if (userchan->starve_samples > 0) // the download is ahead of playback again
+    {
+      const char *sn=user->name.Get(), *sat=strchr(sn,'@');
+      SYNCLOG("audio STARVE end: user=%.*s ch=%d lost=%.0fms pos=%.2fs swapCnt=%d", sat?(int)(sat-sn):(int)strlen(sn), sn, chanidx,
+              userchan->starve_samples*1000.0/srate, m_interval_pos/(double)srate, m_sync_interval_cnt);
+      userchan->starve_samples=0;
+    }
     float *sptr=chan->decode_codec->Get();
 
     // process VU meter, yay for powerful CPUs
@@ -3173,6 +3184,16 @@ void NJClient::mixInChannel(RemoteUser *user, int chanidx,
   {
     if (!llmode&&!sessionmode)
     {
+      // Playback reached a download still streaming in: silence until its data arrives (what
+      // arrives late is skipped). Running out once the download ended is just its end.
+      const bool streaming = chan->decode_buf && chan->decode_buf->end_ms <= 0.0;
+      if (streaming && userchan->starve_samples <= 0)
+      {
+        const char *sn=user->name.Get(), *sat=strchr(sn,'@');
+        SYNCLOG("audio STARVE begin: user=%.*s ch=%d pos=%.2fs swapCnt=%d", sat?(int)(sat-sn):(int)strlen(sn), sn, chanidx,
+                m_interval_pos/(double)srate, m_sync_interval_cnt);
+      }
+      if (streaming) userchan->starve_samples += len;
       userchan->dump_samples+=needed*srcnch - chan->decode_codec->Available();
       chan->decode_codec->Skip(chan->decode_codec->Available());
     }
@@ -3428,6 +3449,42 @@ int NJClient::holdIntervalChannel(RemoteUser_Channel *chan, int swaps)
   return chan->hold_swaps;
 }
 
+// A remote interval starts playing at our next swap while its download may still be
+// streaming in, only as far ahead of it as the download is old. When a sender's
+// intervals begin just before our boundaries (the phase between two clients is random
+// per connection and stays until one reconnects), every interval plays a fraction of a
+// second ahead of its data and any network hiccup longer than that is a gap — for the
+// whole session. Such a download waits one more swap instead: the user plays one
+// interval later, with a whole interval of margin.
+double NJClient::lateStartGuardMs() const
+{
+  const double intervalMs = m_srate > 0 ? m_interval_length * 1000.0 / m_srate : 0.0;
+  const double guard = config_late_start_guard_ms > 0.0 ? config_late_start_guard_ms : 0.0;
+  return intervalMs > 0.0 && intervalMs * 0.25 < guard ? intervalMs * 0.25 : guard;
+}
+
+// Age (ms) of the youngest download about to start on one of `user`'s interval channels
+// at this swap, when it is younger than lateStartGuardMs(); -1 otherwise. One decision
+// for all the user's channels keeps them on the same interval.
+double NJClient::lateStartAgeMs(RemoteUser *user) const
+{
+  const double guard = lateStartGuardMs();
+  if (guard <= 0.0) return -1.0;
+  const double now = njc_now_ms();
+  double youngest = -1.0;
+  for (int ch = 0; ch < MAX_USER_CHANNELS; ch ++)
+  {
+    const RemoteUser_Channel *chan = &user->channels[ch];
+    if ((chan->flags & (2|4|0x10)) || chan->hold_swaps > 0) continue;
+    if (!((user->submask & user->chanpresentmask) & (1<<ch))) continue;
+    const DecodeState *nds = chan->next_ds[0];
+    if (!nds || nds->begin_ms <= 0.0) continue;
+    const double age = now - nds->begin_ms;
+    if (age < guard && (youngest < 0.0 || age < youngest)) youngest = age;
+  }
+  return youngest;
+}
+
 void NJClient::on_new_interval()
 {
   m_loopcnt++;
@@ -3468,6 +3525,13 @@ void NJClient::on_new_interval()
   {
     RemoteUser *user=m_remoteusers.Get(u);
     int ch;
+    const double lateAge = lateStartAgeMs(user);
+    if (lateAge >= 0.0)
+    {
+      const char *un=user->name.Get(), *uat=strchr(un,'@');
+      SYNCLOG("audio LATE-START: user=%.*s age=%.0fms guard=%.0fms - plays one interval later",
+              uat?(int)(uat-un):(int)strlen(un), un, lateAge, lateStartGuardMs());
+    }
 //    printf("submask=%d,cpm=%d\n",user->submask , user->chanpresentmask);
     for (ch = 0; ch < MAX_USER_CHANNELS; ch ++)
     {
@@ -3476,6 +3540,15 @@ void NJClient::on_new_interval()
       if (!(chan->flags&2) && !(chan->flags&4) && chan->hold_swaps > 0)
       {
         chan->hold_swaps--; // ds waits, unplayed, for the user's other channels
+      }
+      else if (!(chan->flags&(2|4|0x10)) && lateAge >= 0.0)
+      {
+        // Late start: the finished interval goes, the queue stays — what arrived plays
+        // from the next swap, a whole interval ahead of the stream.
+        overlapFadeState fade_state;
+        if (chan->ds) chan->ds->calcOverlap(&fade_state);
+        delete chan->ds;
+        chan->ds=0;
       }
       else if (!(chan->flags&2) && !(chan->flags&4))
       {
@@ -4376,7 +4449,7 @@ void NJClient::SetWorkDir(char *path)
 }
 
 
-RemoteUser_Channel::RemoteUser_Channel() : volume(1.0f), pan(0.0f), out_chan_index(0), flags(0), dump_samples(0), ds(NULL), rejoin_grid(0), hold_swaps(0)
+RemoteUser_Channel::RemoteUser_Channel() : volume(1.0f), pan(0.0f), out_chan_index(0), flags(0), dump_samples(0), ds(NULL), rejoin_grid(0), hold_swaps(0), starve_samples(0)
 {
   decode_peak_vol[0]=decode_peak_vol[1]=0.0;
   memset(next_ds,0,sizeof(next_ds));

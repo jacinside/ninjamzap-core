@@ -126,6 +126,11 @@ public:
   // (alignUserChannels, docs/CHANNEL_ALIGNMENT.md). 0: per-channel queues, as before.
   // Applies to receiving; senders always tag their interval GUIDs.
   int   config_align_channels;
+  // A remote interval that began arriving less than this long (ms) before it would start
+  // playing waits one more swap, so it plays a whole interval ahead of its stream instead
+  // of breaking up at every network hiccup (lateStartAgeMs). Capped at a quarter of the
+  // interval. Default 1500; 0 turns it off.
+  double config_late_start_guard_ms;
 
   float GetOutputPeak(int ch=-1);
 
@@ -283,6 +288,8 @@ protected:
   void rejoinIntervalGrid(RemoteUser *user, int ch);
   int holdIntervalChannel(RemoteUser_Channel *chan, int swaps);
   void alignUserChannels(RemoteUser *user);
+  double lateStartGuardMs() const;
+  double lateStartAgeMs(RemoteUser *user) const;
   void makeIntervalGuid(unsigned char *guid, unsigned int interval, int chidx);
   void writeUserChanLog(const char *lbl, RemoteUser *user, RemoteUser_Channel *chan, int chanidx);
 
