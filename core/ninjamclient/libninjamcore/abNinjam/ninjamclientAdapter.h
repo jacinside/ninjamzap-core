@@ -206,6 +206,7 @@ public:
     // User and channel information
     std::vector<AbNinjam::Common::RemoteUser> getRemoteUsers();
     void setUserChannelVolume(int userId, int channelId, float volume);
+    void setUserState(int userId, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute);
     void setUserChannelState(int userId, int channelId,bool setsub, bool sub, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute, bool setsolo, bool solo, bool setoutch, int outchannel);
     void setLocalChannelVolume(int channelId, float volume);
     float getUserChannelPeak(int useridx, int channelidx, int whichch);

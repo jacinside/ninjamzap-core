@@ -909,6 +909,12 @@ void NinjamClientAdapter::setUserChannelVolume(int userId, int channelId, float 
     }
 }
 
+void NinjamClientAdapter::setUserState(int userId, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute) {
+    if (connected && client) {
+        client->setUserState(userId, setvol, vol, setpan, pan, setmute, mute);
+    }
+}
+
 void NinjamClientAdapter::setUserChannelState(int userId, int channelId,bool setsub, bool sub, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute, bool setsolo, bool solo, bool setoutch, int outchannel) {
     if (connected && client) {
         client->setUserChannelState(userId, channelId, setsub, sub, setvol, vol, setpan, pan, setmute,  mute, setsolo, solo, setoutch, outchannel);

@@ -410,6 +410,12 @@ void NinjamClient::setUserChannelVolume(int userId, int channelId,
   }
 }
 
+void NinjamClient::setUserState(int userId, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute) {
+  if (njClient) {
+    njClient->SetUserState(userId, setvol, vol, setpan, pan, setmute, mute);
+  }
+}
+
 //int useridx, int channelidx,bool setsub, bool sub, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute, bool setsolo, bool solo, bool setoutch, int outchannel)
 void NinjamClient::setUserChannelState(int userId, int channelId,bool setsub, bool sub, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute, bool setsolo, bool solo, bool setoutch, int outchannel) {
   L_(ltrace) << "[NinjamClient] Entering NinjamClient::setUserChannelState";

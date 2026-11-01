@@ -51,6 +51,8 @@ public:
   void setBpm(int bpm);
   std::vector<RemoteUser> getRemoteUsers();
   void setUserChannelVolume(int userId, int channelId, float volume);
+  // The whole user: scales / pans / mutes all their channels on top of each channel's own state.
+  void setUserState(int userId, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute);
   void setUserChannelState(int userId, int channelId,bool setsub, bool sub, bool setvol, float vol, bool setpan, float pan, bool setmute, bool mute, bool setsolo, bool solo, bool setoutch, int outchannel);
   void setLocalChannelVolume(int channelId, float volume);
   void sendChatMessage(std::string message);
