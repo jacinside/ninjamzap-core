@@ -893,7 +893,9 @@ unsigned int NJClient::GetSessionPosition()// returns milliseconds
 
 void NJClient::AudioProc(float **inbuf, int innch, float **outbuf, int outnch, int len, int srate, bool justmonitor, bool isPlaying, bool isSeek, double cursessionpos)
 {
-  m_srate=srate;
+  // Only on a change: Run() reads m_srate on the network thread (new encoders), and rewriting
+  // the same value every audio callback is still a data race.
+  if (m_srate != srate) m_srate=srate;
   // zero output
   int x;
   for (x = 0; x < outnch; x ++) memset(outbuf[x],0,sizeof(float)*len);

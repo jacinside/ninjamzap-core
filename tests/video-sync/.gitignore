@@ -1,5 +1,7 @@
 build/
+build-tsan/
 video_sync_tests
+video_sync_tests_tsan
 
 # Un-ignore fixture log files (root .gitignore excludes *.log globally)
 !fixtures/*.log

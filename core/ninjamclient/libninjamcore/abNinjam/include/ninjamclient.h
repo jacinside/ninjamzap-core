@@ -16,6 +16,7 @@
 #include "ninjamclientstatus.h"
 #include "remotechannel.h"
 #include "remoteuser.h"
+#include <atomic>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -65,7 +66,9 @@ public:
 private:
   std::thread *connectionThread;
   NJClient *njClient = new NJClient;
-  bool stopConnectionThread, autoRemoteVolume;
+  // Set by disconnect() on the caller's thread, read by the connection thread.
+  std::atomic<bool> stopConnectionThread{true};
+  bool autoRemoteVolume;
   std::mutex mtx;
 };
 

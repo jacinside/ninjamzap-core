@@ -33,7 +33,7 @@ BUILD    := $(CURDIR)/build
 # Homebrew on Apple Silicon
 BREW_PREFIX ?= $(shell brew --prefix 2>/dev/null || echo /opt/homebrew)
 
-INCLUDES := -I$(CORE) -I$(WDL) -I$(VENDOR) -I$(HARNESS) -I$(BREW_PREFIX)/include
+INCLUDES := -I$(CORE) -I$(CORE)/abNinjam/include -I$(WDL) -I$(VENDOR) -I$(HARNESS) -I$(BREW_PREFIX)/include
 # DEBUG enables SYNCLOG in njclient.cpp (gated since the Release-build log
 # cleanup) — the harness asserts on SYNCLOG events via SyncLogCapture.
 # NINJAMCORE_TEST_HOOKS exposes test-only NJClient entry points; set only here
@@ -62,6 +62,10 @@ CORE_CPP_OBJS := \
 CORE_C_OBJS := \
   $(BUILD)/core/vorbis_encoder.o
 
+# The app's adapter over NJClient (abNinjam/): scenarios that drive it as the app does.
+ADAPTER_SRCS := $(sort $(wildcard $(CORE)/abNinjam/*.cpp))
+ADAPTER_OBJS := $(ADAPTER_SRCS:$(CORE)/abNinjam/%.cpp=$(BUILD)/abNinjam/%.o)
+
 # --- Harness + scenarios -------------------------------------------------
 HARNESS_SRCS := $(sort $(wildcard $(HARNESS)/*.cpp))
 # Sorted: Catch2 runs scenarios in link order, and some leave server state
@@ -72,10 +76,10 @@ SCEN_OBJS    := $(SCEN_SRCS:$(SCEN)/%.cpp=$(BUILD)/scenarios/%.o)
 
 CATCH_OBJ := $(BUILD)/vendor/catch_amalgamated.o
 
-ALL_OBJS := $(CORE_CPP_OBJS) $(CORE_C_OBJS) $(HARNESS_OBJS) $(SCEN_OBJS) $(CATCH_OBJ)
+ALL_OBJS := $(CORE_CPP_OBJS) $(CORE_C_OBJS) $(ADAPTER_OBJS) $(HARNESS_OBJS) $(SCEN_OBJS) $(CATCH_OBJ)
 
 # --- Targets -------------------------------------------------------------
-.PHONY: all clean test test-real
+.PHONY: all clean test test-real tsan
 
 all: video_sync_tests
 
@@ -91,6 +95,11 @@ $(BUILD)/core/%.o: $(CORE)/%.cpp
 $(BUILD)/core/%.o: $(CORE)/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# Adapter .cpp
+$(BUILD)/abNinjam/%.o: $(CORE)/abNinjam/%.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # WDL .cpp
 $(BUILD)/wdl/%.o: $(WDL)/%.cpp
@@ -118,7 +127,17 @@ $(CATCH_OBJ): $(VENDOR)/catch_amalgamated.cpp
 	$(CXX) $(CXXSTD) $(OPT) -DCATCH_AMALGAMATED_CUSTOM_MAIN=1 -I$(VENDOR) -c $< -o $@
 
 clean:
-	rm -rf $(BUILD) video_sync_tests
+	rm -rf $(BUILD) build-tsan video_sync_tests video_sync_tests_tsan
+
+# ThreadSanitizer build in its own tree + binary, for data races (scenario 41). Same server boot.
+tsan:
+	$(MAKE) BUILD=$(CURDIR)/build-tsan OPT="-O1 -g -fsanitize=thread" video_sync_tests
+	mv video_sync_tests video_sync_tests_tsan
+	@OUT=$$(./docker/run-server.sh) && \
+	  NAME=$$(echo "$$OUT" | awk '{print $$1}') && \
+	  PORT=$$(echo "$$OUT" | awk '{print $$2}') && \
+	  trap "docker rm -f $$NAME >/dev/null 2>&1" EXIT && \
+	  NJ_TEST_HOST=127.0.0.1 NJ_TEST_PORT=$$PORT TSAN_OPTIONS="halt_on_error=1" ./video_sync_tests_tsan $(TEST_ARGS)
 
 -include $(ALL_OBJS:.o=.d)
 

@@ -449,6 +449,10 @@ void NinjamClientAdapter::removeLocalChannel(int channelIndex) {
     int nj = njLocalIdx(channelIndex, false);
     if (nj < 0) nj = channelIndex; // unknown id: fall back to raw (legacy behavior)
     localIdToNjIdx.erase(channelIndex);
+    // NJClient leaves serializing Run() with changes to the local channel list to its caller:
+    // the connection thread runs Run() under gsMtx, so take it too — else the channel (and its
+    // encoder) is deleted while Run() is encoding it.
+    std::lock_guard<std::mutex> lock(client->gsMtx());
     client->gsNjClient()->DeleteLocalChannel(nj);
     // Tell the server the channel set changed so other clients drop the
     // removed channel — DeleteLocalChannel alone doesn't notify.
@@ -492,6 +496,8 @@ void NinjamClientAdapter::SetLocalChannelInfo(int index, const char* name, bool 
         printf("NinjamClientAdapter::SetLocalChannelInfo: WARNING jsId=%d -> njIdx=%d exceeds server maxLocalCh=%d; channel will not transmit\n", index, nj, maxLocal);
     }
     printf("NinjamClientAdapter::SetLocalChannelInfo: jsId=%d -> njIdx=%d name=%s srcch=%d xmit=%d\n", index, nj, name ? name : "(null)", srcch, xmit);
+    // A new channel grows the list Run() walks on the connection thread (see removeLocalChannel).
+    std::lock_guard<std::mutex> lock(client->gsMtx());
     client->gsNjClient()->SetLocalChannelInfo(
                                               nj,
                                               name, //--> name : Nombre del canal
@@ -514,6 +520,8 @@ void NinjamClientAdapter::setLocalChannelBitrate(int index, int bitrate) {
     int nj = njLocalIdx(index, true);
     // Pass nullptr for name + all setX flags false except setbitrate — NJClient
     // skips fields whose setX is false, and skips name when it's null.
+    // Can create the channel, and Run() reads its bitrate: under gsMtx (see removeLocalChannel).
+    std::lock_guard<std::mutex> lock(client->gsMtx());
     client->gsNjClient()->SetLocalChannelInfo(
                                               nj,
                                               nullptr,    // name unchanged

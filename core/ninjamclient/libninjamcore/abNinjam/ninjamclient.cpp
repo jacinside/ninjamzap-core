@@ -116,7 +116,8 @@ NinjamClient::~NinjamClient() {
 void keepConnectionThread(NinjamClient *ninjamClient) {
   L_(ltrace) << "Entering keepConnectionThread";
 
-  ninjamClient->gsStopConnectionThread() = false;
+  // stopConnectionThread is reset by connect() before this thread starts: resetting it here
+  // could undo a disconnect() that came first, and join() there would wait forever.
   NJClient *g_client = ninjamClient->gsNjClient();
   bool connected = false;
   while (g_client->GetStatus() >= 0 &&
@@ -227,10 +228,9 @@ NinjamClient::connect(ConnectionProperties *connectionProperties) {
     }
   }
   if (connected) {
+    // Joined by disconnect(), so Disconnect() never runs while this thread is in Run().
+    stopConnectionThread = false;
     connectionThread = new thread(keepConnectionThread, this);
-    if (connectionThread) {
-      connectionThread->detach();
-    }
     return ok;
   }
   if (agree == 256) {
@@ -246,15 +246,11 @@ void NinjamClient::disconnect() {
   NinjamClient_cancelPendingLicense(); // Unblock license dialog if waiting
   stopConnectionThread = true;
   if (connectionThread) {
-    if (connectionThread->joinable()) {
-      connectionThread->join();
-    } else {
-      // L_(ltrace) << "delete";
-      // delete connectionThread;
-    }
+    // Wait for its last Run() (it leaves the loop at the next check of the flag).
+    if (connectionThread->joinable()) connectionThread->join();
+    delete connectionThread;
+    connectionThread = nullptr;
   }
-  stopConnectionThread = true;
-  std::this_thread::sleep_for(std::chrono::milliseconds(100)); // ⚠️ solo parche
   if (connected && njClient) {
       njClient->Disconnect();
   }
