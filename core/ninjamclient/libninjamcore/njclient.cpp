@@ -3666,14 +3666,19 @@ void NJClient::on_new_interval()
       marker[6] = (unsigned char)((m_sync_interval_cnt >> 8) & 0xFF);
       marker[7] = (unsigned char)(m_sync_interval_cnt & 0xFF);
       memset(marker + 8, 0, 16);
+      // Pick the GUID of the lowest-index audio channel that is actually broadcasting — NOT a
+      // hardcoded ch0. If ch0 is muted / not transmitting it has no interval GUID, so the receiver
+      // can't match the video to any audio it has and falls ~1 interval off (the "video follows ch0"
+      // bug). The video channel itself (flags & 0x10) is skipped.
+      Local_Channel *gch = 0;
       for (int li = 0; li < m_locchannels.GetSize(); li++) {
         Local_Channel *lc = m_locchannels.Get(li);
-        if (lc && lc->channel_idx == 0) {
-          memcpy(marker + 8, lc->m_curwritefile.guid, 16);
-          break;
-        }
+        if (lc && lc->broadcasting && !(lc->flags & 0x10) &&
+            (!gch || lc->channel_idx < gch->channel_idx))
+          gch = lc;
       }
-      SYNCLOG("SEND video marker: swap=%d audioGuid=%02x%02x", m_sync_interval_cnt, marker[8], marker[9]);
+      if (gch) memcpy(marker + 8, gch->m_curwritefile.guid, 16);
+      SYNCLOG("SEND video marker: swap=%d audioGuid=%02x%02x ch=%d", m_sync_interval_cnt, marker[8], marker[9], gch ? gch->channel_idx : -1);
       RawDataSendWrite(m_video_guid, marker, 24, false);
     }
     // Send cached SPS/PPS as second chunk so receiver can init decoder
