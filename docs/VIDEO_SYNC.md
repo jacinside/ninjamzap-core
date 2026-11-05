@@ -429,7 +429,7 @@ interval:
 3. Send the **sync marker** as one `UPLOAD_INTERVAL_WRITE`. Payload (24 bytes):
    - 4 B BE `0x00 00 00 14` (= 20, the inner length)
    - 4 B BE interval counter
-   - 16 B audio channel-0 GUID (see "Audio GUID source")
+   - 16 B audio interval GUID (see "Audio GUID source")
 4. Send the cached **SPS/PPS block** as a second `UPLOAD_INTERVAL_WRITE`.
    Payload: `[4B BE inner length][2B BE SPS len][SPS NAL][2B BE PPS len][PPS NAL]`.
 5. As the encoder produces frames during the interval, send each as its own
@@ -452,12 +452,16 @@ GUID before applying the outer-length parser.
 - **Video GUID** — fresh 16 random bytes per video interval, generated on the
   sender right before sending `UPLOAD_INTERVAL_BEGIN`. In our code we use
   `WDL_RNG_bytes(guid, 16)` (the same RNG NINJAM uses for audio).
-- **Audio GUID source for the sync marker** — read the GUID that the local
-  audio channel 0 has in its *current* upload-interval header. In our code:
-  `m_curwritefile.guid` for audio channel 0. In protocol terms: it's the same
-  16 bytes you passed to your most recent audio `UPLOAD_INTERVAL_BEGIN` for
-  channel 0. Both ends of the connection see the same 16 bytes; that
-  identity is what makes the GUID match work at the receiver.
+- **Audio GUID source for the sync marker** — read the GUID of the interval
+  your lowest-index interval-mode audio channel is uploading or just uploaded:
+  the 16 bytes you passed to its most recent audio `UPLOAD_INTERVAL_BEGIN`. In
+  our code: the first non-zero `m_curwritefile.guid` among the local channels,
+  by channel index, leaving out video (`0x10`) and voice-chat / session
+  (`2|4`) channels. Don't hardcode channel 0: a channel whose transmit is off
+  uploads nothing, so its GUID would match no audio the receiver has, and the
+  video would play an interval away from it. Both ends of the connection see
+  the same 16 bytes; that identity is what makes the GUID match work at the
+  receiver.
 
 ### Decoder build / rebuild policy (receiver)
 
@@ -513,6 +517,8 @@ GUID before applying the outer-length parser.
   frame offset than complete frames while a frame is still arriving. Copy all
   the offsets when moving a buffer between slots, or the next frame is read
   from the wrong place.
+- **Sender: do not hardcode the audio channel index of the marker's GUID**
+  (see "Audio GUID source").
 - **Receiver: do not hardcode the audio channel index when matching the
   video marker's audio GUID.** A sender may place audio on channels 2/3
   and reserve channel 1 for video to keep concerns separated; the audio
