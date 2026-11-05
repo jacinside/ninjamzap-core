@@ -30,6 +30,12 @@ CASES=(
   "fl11|39_multichannel_align|NJ_MC_PLAN=fill NJ_REAL_PHASE_MS=11000|"
   "fv7|39_multichannel_align|NJ_MC_PLAN=fillvc NJ_REAL_PHASE_MS=7000|"
   "fv11|39_multichannel_align|NJ_MC_PLAN=fillvc NJ_REAL_PHASE_MS=11000|"
+  "xo0|39_multichannel_align|NJ_MC_PLAN=xmit NJ_MC_CHANNELS=4 NJ_REAL_PHASE_MS=300|"
+  "xo3|39_multichannel_align|NJ_MC_PLAN=xmit NJ_MC_CHANNELS=4 NJ_REAL_PHASE_MS=3000|"
+  "xo7|39_multichannel_align|NJ_MC_PLAN=xmit NJ_MC_CHANNELS=4 NJ_REAL_PHASE_MS=7000|"
+  "xo9|39_multichannel_align|NJ_MC_PLAN=xmit NJ_MC_CHANNELS=4 NJ_REAL_PHASE_MS=9000|"
+  "xo11|39_multichannel_align|NJ_MC_PLAN=xmit NJ_MC_CHANNELS=4 NJ_REAL_PHASE_MS=11000|"
+  "xj7|39_multichannel_align|NJ_MC_PLAN=xmit NJ_MC_CHANNELS=4 NJ_REAL_PHASE_MS=7000|$JITTER"
   "hm3|37_no_voice_chat_jitter|NJ_CH0_MUTED=1 NJ_REAL_PHASE_MS=300|"
 )
 

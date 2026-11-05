@@ -14,12 +14,17 @@
 // to start playing late in the interval; when that crosses the receiver's swap the
 // channel misses the swap and its queue keeps it one interval behind for good.
 //
+// Reported 2026-11-04: with channel 1's Transmit off and the music on the other channels,
+// the video played about one interval away from the audio. The video's sync marker
+// carried channel 0's interval GUID, which a channel that doesn't transmit doesn't have,
+// so the receiver had no audio to match the video to (plan xmit).
+//
 // Besides the interval each channel plays, the check counts frames where a channel
 // that should sound is missing: aligning must never silence a channel.
 //
 // Real-interval server only (docker/test-multi.cfg lets anonymous users claim up to
 // 32 channels): `make test-real`. Env: NJ_TEST_INTERVAL_MS, NJ_MC_PLAN
-// (mute|vc|vcmute|vcloud|mix|fill|fillvc), NJ_MC_CHANNELS,
+// (mute|vc|vcmute|vcloud|mix|fill|fillvc|xmit), NJ_MC_CHANNELS,
 // NJ_REAL_PHASE_MS, NJ_REAL_PREFIX, NJ_MC_UNTAGGED, NJ_MC_SYNCLOG.
 #include <algorithm>
 #include <chrono>
@@ -45,7 +50,7 @@ namespace {
 
 const int kI = std::getenv("NJ_TEST_INTERVAL_MS") ? std::atoi(std::getenv("NJ_TEST_INTERVAL_MS")) : 1000;
 
-enum Act { MUTE, UNMUTE, VC_ON, VC_OFF, GAIN, GATE };
+enum Act { MUTE, UNMUTE, VC_ON, VC_OFF, GAIN, GATE, XMIT_OFF, XMIT_ON };
 
 struct McStep {
   int atMs;
@@ -66,6 +71,8 @@ const char *actName(Act a) {
   case VC_ON: return "VC ON";
   case VC_OFF: return "VC off";
   case GATE: return "gate";
+  case XMIT_OFF: return "XMIT OFF";
+  case XMIT_ON: return "xmit on";
   default: return "gain";
   }
 }
@@ -125,6 +132,16 @@ std::vector<McStep> makePlan(const std::string &name, int nch, int &intervals) {
     }
     p.push_back({at(k, 0.0), 3, GATE, 0.85f});
     intervals = k + 14;
+  } else if (name == "xmit") {
+    // The app's Transmit toggle: channel 1 (ch0) doesn't transmit, the music plays on
+    // the others. Then ch1 stops too (the lowest transmitting channel moves to ch2),
+    // comes back, and ch0 comes back (its first interval has no GUID yet) and leaves.
+    p.push_back({0, 0, XMIT_OFF});
+    p.push_back({at(5, 0.4), 1, XMIT_OFF});
+    p.push_back({at(8, 0.7), 1, XMIT_ON});
+    p.push_back({at(11, 0.3), 0, XMIT_ON});
+    p.push_back({at(14, 0.6), 0, XMIT_OFF});
+    intervals = 18;
   } else { // mix: ch0 muted throughout, a near-silent channel, mutes and voice chat elsewhere
     p.push_back({0, 0, MUTE});
     p.push_back({0, nch - 2, GAIN, 0.05f}); // a mic left almost closed (below the detector: not checked)
@@ -212,8 +229,11 @@ TEST_CASE("39_multichannel_align", "[.][scenario39]") {
       const int tag = sender.currentSwap();
       switch (s.act) {
       case MUTE: sender.setChannelSilent(s.ch, true); mutedAt[s.ch] = tag; break;
+      case XMIT_OFF: sender.setChannelTransmit(s.ch, false); mutedAt[s.ch] = tag; break;
       case UNMUTE:
-        sender.setChannelSilent(s.ch, false);
+      case XMIT_ON:
+        if (s.act == UNMUTE) sender.setChannelSilent(s.ch, false);
+        else sender.setChannelTransmit(s.ch, true);
         mutedSpan[s.ch].push_back({mutedAt.count(s.ch) ? mutedAt[s.ch] : 0, tag});
         mutedAt.erase(s.ch);
         break;

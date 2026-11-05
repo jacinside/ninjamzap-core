@@ -140,6 +140,11 @@ public:
   void setVoiceChat(int ch, bool on, bool notify = true);
   void notifyChannels();
 
+  // Turns local channel `ch`'s transmit on or off and tells the server — what the
+  // app's per-channel Transmit toggle does (NinjamClientAdapter::SetLocalChannelInfo).
+  // Off: the channel stops uploading at the next interval; its input keeps sounding.
+  void setChannelTransmit(int ch, bool on);
+
   // Drains and returns recorded video frames from VideoFrameReady_Callback.
   std::vector<VideoFrameRecord> drainVideoFrames();
 
