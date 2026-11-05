@@ -188,6 +188,15 @@ void TestClient::setVoiceChat(int ch, bool on, bool notify) {
   if (notify) client_->NotifyServerOfChannelChange();
 }
 
+void TestClient::setChannelTransmit(int ch, bool on) {
+  if (!client_) return;
+  client_->SetLocalChannelInfo(ch, NULL,
+                               /*setsrcch*/ false, 0,
+                               /*setbitrate*/ false, 0,
+                               /*setbcast*/ true, on);
+  client_->NotifyServerOfChannelChange();
+}
+
 void TestClient::outputSnapshot(std::vector<float> &l, std::vector<float> &r) {
   std::lock_guard<std::mutex> lk(outMu_);
   l = recL_;
