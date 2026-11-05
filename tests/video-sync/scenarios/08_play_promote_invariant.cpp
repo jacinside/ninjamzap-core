@@ -88,12 +88,13 @@ struct ParsedTrace {
 };
 
 ParsedTrace parseTrace(const std::vector<std::string> &lines, const std::string &key) {
-  // SWAP#K video PLAY: key=<key> match=<DS|PREV|NONE> vidSeq=<N> ... (<action>)
+  // SWAP#K video PLAY: key=<key> match=<DS|PREV|NONE|QUEUED|ALIGNED> vidSeq=<N> ... (<action>)
+  // QUEUED / ALIGNED: video that waited for queued audio (awaiting); the same invariant holds.
   // action ∈ {"deferred → pending", "immediate → playing"}; older builds may
   // omit the suffix entirely — treat that as "pending" (the historical default).
   std::string playPat =
       R"(SWAP#(\d+) video PLAY: key=)" + key +
-      R"( match=(DS|PREV|NONE) vidSeq=(-?\d+))";
+      R"( match=(DS|PREV|NONE|QUEUED|ALIGNED) vidSeq=(-?\d+))";
   std::regex playRe(playPat);
   std::regex actionRe(R"(\((deferred → pending|immediate → playing)\))");
   std::string promPat =
