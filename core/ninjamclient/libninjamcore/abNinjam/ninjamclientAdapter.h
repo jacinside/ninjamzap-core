@@ -186,7 +186,7 @@ public:
     // next interval on, every remote and local interval is kept as
     // <dir>/<0-f>/<guid>.ogg and indexed in <dir>/clipsort.log. `dir` must
     // exist. Returns false if an archive is already running.
-    bool startSessionArchive(const char *dir);
+    bool startSessionArchive(const char *dir, bool withVideo = false);
     // Stops saving and closes clipsort.log with its "end" line. Files of
     // intervals in progress complete normally.
     void stopSessionArchive();

@@ -697,6 +697,7 @@ NJClient::NJClient()
 
   config_autosubscribe=1;
   config_savelocalaudio=0;
+  config_savevideo=0;
   config_metronome=0.5f;
   config_metronome_pan=0.0f;
   config_metronome_mute=false;
@@ -857,7 +858,12 @@ NJClient::~NJClient()
   m_locchannels.Empty();
   for (x = 0; x < m_rawdata_sendq.GetSize(); x ++) delete m_rawdata_sendq.Get(x);
   m_rawdata_sendq.Empty();
-  for (x = 0; x < m_rawdata_downloads.GetSize(); x ++) delete m_rawdata_downloads.Get(x);
+  for (x = 0; x < m_rawdata_downloads.GetSize(); x ++)
+  {
+    RawDataDownloadTracker *t = m_rawdata_downloads.Get(x);
+    if (t && t->archive_fp) fclose(t->archive_fp);
+    delete t;
+  }
   m_rawdata_downloads.Empty();
 
   delete m_wavebq;
@@ -1499,6 +1505,26 @@ int NJClient::Run() // nonzero if sleep ok
                   tracker->fourcc = dib.fourcc;
                   lstrcpyn_safe(tracker->username, dib.username, sizeof(tracker->username));
                   tracker->chidx = dib.chidx;
+                  tracker->archive_fp = NULL;
+                  if (config_savelocalaudio>0 && config_savevideo>0)
+                  {
+                    // Session archive with video: the download as received, next to the audio .OGG
+                    // files. Opened at BEGIN like RemoteDownload, so it holds the whole interval.
+                    WDL_String s;
+                    makeFilenameFromGuid(&s,tracker->guid);
+                    // All 4 fourcc chars ("H264"): type_to_string keeps only 3 (OGGv -> OGG).
+                    char ext[5] = { (char)(dib.fourcc & 0xff), (char)((dib.fourcc >> 8) & 0xff),
+                                    (char)((dib.fourcc >> 16) & 0xff), (char)((dib.fourcc >> 24) & 0xff), 0 };
+                    for (int e = 0; e < 4; e++) if (!isalnum((unsigned char)ext[e])) ext[e] = '_';
+                    s.Append(".");
+                    s.Append(ext);
+                    tracker->archive_fp=fopenUTF8(s.Get(),"wb");
+                    char guidstr[64], uname[256], *p;
+                    guidtostr(dib.guid,guidstr);
+                    lstrcpyn_safe(p=uname,dib.username,sizeof(uname));
+                    while (*p) { if (*p == '\"') *p = '\''; p++; }
+                    writeLog("video %s \"%s\" %d\n",guidstr,uname,dib.chidx);
+                  }
                   m_rawdata_downloads.Add(tracker);
 
                   // Find or create per-user video stream state
@@ -1577,6 +1603,8 @@ int NJClient::Run() // nonzero if sleep ok
                   RawDataDownloadTracker *tracker = m_rawdata_downloads.Get(ri);
                   if (tracker && !memcmp(tracker->guid, diw.guid, 16))
                   {
+                    if (tracker->archive_fp && diw.audio_data_len > 0 && diw.audio_data)
+                      fwrite(diw.audio_data, 1, diw.audio_data_len, tracker->archive_fp);
                     // Accumulate video frame into per-user stream state
                     if (diw.audio_data_len > 0 && diw.audio_data)
                     {
@@ -1777,6 +1805,7 @@ int NJClient::Run() // nonzero if sleep ok
                         }
                       }
                       m_video_recv_cs.Leave();
+                      if (tracker->archive_fp) fclose(tracker->archive_fp);
                       delete tracker;
                       m_rawdata_downloads.Delete(ri);
                     }
