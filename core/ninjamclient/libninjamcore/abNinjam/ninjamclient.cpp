@@ -348,11 +348,14 @@ std::vector<AbNinjam::Common::RemoteUser> NinjamClient::getRemoteUsers() {
   int numUsers = njClient->GetNumUsers();
   L_(ltrace) << "[NinjamClient] numUsers: " << numUsers;
   for (int useridx = 0; useridx < numUsers; useridx++) {
-    RemoteUser *user = new RemoteUser();
-    user->id = useridx;
-    user->name = njClient->GetUserState(useridx);
-    L_(ltrace) << "[NinjamClient] user->id: " << user->id;
-    L_(ltrace) << "[NinjamClient] user->name: " << user->name;
+    // By value: these were new'd and pushed by copy but never deleted — a leak on every
+    // call. getRemoteUsers runs every ~500 ms in the always-on bot (AssignStemOutputs), so
+    // it leaked a RemoteUser + one RemoteChannel per channel each tick.
+    RemoteUser user;
+    user.id = useridx;
+    user.name = njClient->GetUserState(useridx);
+    L_(ltrace) << "[NinjamClient] user.id: " << user.id;
+    L_(ltrace) << "[NinjamClient] user.name: " << user.name;
     for (int channelidx = 0; channelidx < MAX_USER_CHANNELS; channelidx++) {
       float vol;
       int flags = 0;
@@ -365,23 +368,23 @@ std::vector<AbNinjam::Common::RemoteUser> NinjamClient::getRemoteUsers() {
         int decodedNch = njClient->GetUserChannelDecodedNch(useridx, channelidx);
         bool isStereo = (decodedNch >= 2);
 
-        RemoteChannel *channel = new RemoteChannel();
-        channel->id = channelidx;
-        channel->volume = vol;
-        channel->name = result;
-        channel->isStereo = isStereo;
-        channel->channelPairIndex = -1;
-        channel->flags = flags;
-        user->channels.push_back(*channel);
-        L_(ltrace) << "[NinjamClient] channel->id: " << channel->id;
-        L_(ltrace) << "[NinjamClient] channel->volume: " << channel->volume;
-        L_(ltrace) << "[NinjamClient] channel->name: " << channel->name;
+        RemoteChannel channel;
+        channel.id = channelidx;
+        channel.volume = vol;
+        channel.name = result;
+        channel.isStereo = isStereo;
+        channel.channelPairIndex = -1;
+        channel.flags = flags;
+        user.channels.push_back(channel);
+        L_(ltrace) << "[NinjamClient] channel.id: " << channel.id;
+        L_(ltrace) << "[NinjamClient] channel.volume: " << channel.volume;
+        L_(ltrace) << "[NinjamClient] channel.name: " << channel.name;
       } else {
         L_(ltrace) << "[NinjamClient] No channel with id " << channelidx
-                   << " found for user " << user->name;
+                   << " found for user " << user.name;
       }
     }
-    users.push_back(*user);
+    users.push_back(std::move(user));
   }
   return users;
 }
