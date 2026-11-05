@@ -536,7 +536,10 @@ void runHoldCase(const char *name, const std::string &prefix, int stallFirstMs, 
   REQUIRE(receiver.panRemoteChannel(prefix + "_sender", 1, 1.f));
   std::this_thread::sleep_for(std::chrono::milliseconds(2 * kIntervalMs));
   if (stallFirstMs > 0) {
-    // both channels fall an interval behind: an interval is queued at every swap
+    // both channels fall an interval behind: an interval is queued at every swap.
+    // Not a whole number of intervals in all (with the kIntervalMs / 2 above): the
+    // sender's next interval would then begin within a few ms of our swap, and whether
+    // it is queued at the hold would be a race (seen on a CI runner).
     receiver.stallAudio(stallFirstMs);
     std::this_thread::sleep_for(std::chrono::milliseconds(3 * kIntervalMs));
   }
@@ -590,7 +593,7 @@ TEST_CASE("34h_hold_realigned — tagged interval GUIDs: the channels realign af
 
 TEST_CASE("34f_hold_with_queued_interval — no hold when an interval is already queued",
           "[sync][scenario34]") {
-  runHoldCase("scenario34f", "vc34f", 1500, 1, 0, true);
+  runHoldCase("scenario34f", "vc34f", kIntervalMs * 5 / 4, 1, 0, true); // 1.75 intervals behind
 }
 
 // The receiver turns ch1's receive off and on again after 34d's voice-chat OFF
