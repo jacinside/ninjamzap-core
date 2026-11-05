@@ -858,13 +858,7 @@ NJClient::~NJClient()
   m_locchannels.Empty();
   for (x = 0; x < m_rawdata_sendq.GetSize(); x ++) delete m_rawdata_sendq.Get(x);
   m_rawdata_sendq.Empty();
-  for (x = 0; x < m_rawdata_downloads.GetSize(); x ++)
-  {
-    RawDataDownloadTracker *t = m_rawdata_downloads.Get(x);
-    if (t && t->archive_fp) fclose(t->archive_fp);
-    delete t;
-  }
-  m_rawdata_downloads.Empty();
+  releaseRawDownloads(NULL);
 
   delete m_wavebq;
 }
@@ -1097,6 +1091,7 @@ void NJClient::Disconnect()
   if (x) m_userinfochange=1; // if we removed users, notify parent
 
   for (x = 0; x < m_downloads.GetSize(); x ++) delete m_downloads.Get(x);
+  releaseRawDownloads(NULL); // their END never comes after a disconnect
 
 
   for (x = 0; x < m_locchannels.GetSize(); x ++) 
@@ -1452,6 +1447,7 @@ int NJClient::Run() // nonzero if sleep ok
                           }
                         }
                         m_video_recv_cs.Leave();
+                        releaseRawDownloads(theuser->name.Get()); // their END never comes
                         delete theuser;
                         m_remoteusers.Delete(x);
                       }
@@ -2396,6 +2392,18 @@ int NJClient::audioQueuePosition(const char *username, const unsigned char *guid
       if (e[i].has[qi] && !memcmp(e[i].guid[qi], guid, 16)) return qi + e[i].hold;
   }
   return -1;
+}
+
+void NJClient::releaseRawDownloads(const char *username)
+{
+  for (int i = m_rawdata_downloads.GetSize() - 1; i >= 0; i--)
+  {
+    RawDataDownloadTracker *t = m_rawdata_downloads.Get(i);
+    if (t && username && strcmp(t->username, username)) continue;
+    if (t && t->archive_fp) fclose(t->archive_fp);
+    delete t;
+    m_rawdata_downloads.Delete(i);
+  }
 }
 
 void NJClient::removeVideoStream(const char *username, int chidx)
