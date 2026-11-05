@@ -3350,11 +3350,15 @@ void NJClient::makeIntervalGuid(unsigned char *guid, unsigned int interval, int 
 // waited for, never dropped. When every channel behind already has the latest
 // interval queued, they skip forward to it instead, so corrections don't add an
 // interval of delay each time (a channel that keeps waiting overflows its queue).
+// Not for a channel that only starts playing at this swap (`joined`: it starts or
+// resumes sending, e.g. its Transmit is turned back on): its queue is empty, so it is
+// ahead of siblings that are not late — skipping would drop an interval of their
+// audio. It waits for them instead.
 // A channel ahead of the target waits one swap (silent, its ds kept). Held, live
 // (voice chat), session and video channels, channels with nothing to play and
 // untagged downloads (the rest of an interval that started in voice chat) are left
 // out: they join at a later swap.
-void NJClient::alignUserChannels(RemoteUser *user)
+void NJClient::alignUserChannels(RemoteUser *user, unsigned int joined)
 {
   int chs[MAX_USER_CHANNELS];
   unsigned int iv[MAX_USER_CHANNELS];
@@ -3381,17 +3385,20 @@ void NJClient::alignUserChannels(RemoteUser *user)
     return;
   }
   unsigned int lo=iv[0], hi=iv[0];
+  bool joinedOnlyAhead=true; // every channel on the latest interval just joined
   for (int i = 1; i < n; i ++)
   {
     if ((int)(iv[i]-lo) < 0) lo=iv[i];
     if ((int)(iv[i]-hi) > 0) hi=iv[i];
   }
+  for (int i = 0; i < n; i ++)
+    if (iv[i] == hi && !(joined & (1u<<chs[i]))) joinedOnlyAhead=false;
   if (lo == hi)
   {
     SYNCLOG("audio ALIGN ok: user=%.*s channels=%d interval=%u", unameLen, uname, n, lo);
     return;
   }
-  bool skip=true;
+  bool skip=!joinedOnlyAhead;
   for (int i = 0; i < n && skip; i ++)
   {
     if (iv[i] == hi) continue;
@@ -3535,6 +3542,7 @@ void NJClient::on_new_interval()
               uat?(int)(uat-un):(int)strlen(un), un, lateAge, lateStartGuardMs());
     }
 //    printf("submask=%d,cpm=%d\n",user->submask , user->chanpresentmask);
+    unsigned int joined=0; // channels that start playing at this swap after playing nothing
     for (ch = 0; ch < MAX_USER_CHANNELS; ch ++)
     {
       RemoteUser_Channel *chan=&user->channels[ch];
@@ -3556,11 +3564,13 @@ void NJClient::on_new_interval()
       {
         chan->dump_samples=0;
         overlapFadeState fade_state;
+        const bool played=chan->ds!=0;
         if (chan->ds) chan->ds->calcOverlap(&fade_state);
         delete chan->ds;
         chan->ds=0;
         if ((user->submask & user->chanpresentmask) & (1<<ch)) chan->ds = chan->next_ds[0];
         else delete chan->next_ds[0];
+        if (!played && chan->ds) joined|=1u<<ch;
         chan->next_ds[0]=chan->next_ds[1]; // advance queue
         chan->next_ds[1]=0;
 
@@ -3571,7 +3581,7 @@ void NJClient::on_new_interval()
         }
       }
     }
-    if (config_align_channels) alignUserChannels(user);
+    if (config_align_channels) alignUserChannels(user, joined);
     for (ch = 0; ch < MAX_USER_CHANNELS; ch ++)
       if (user->channels[ch].rejoin_grid) rejoinIntervalGrid(user, ch);
 #ifdef NINJAMCORE_TEST_HOOKS
