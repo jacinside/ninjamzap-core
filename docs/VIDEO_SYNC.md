@@ -189,8 +189,10 @@ sequenceDiagram
 ## 6. The sync mechanism: GUID matching
 
 Driving video and audio off the same interval clock gets them *close*. To make
-them *exact*, every video interval carries a pointer back to the audio interval
-it was recorded alongside.
+them *exact*, every video interval carries a pointer to the sender's audio: the
+GUID of the audio interval that **ended** as this video interval began (N‑1 for
+video interval N). The video of interval N belongs with the audio interval that
+follows the one named — the audio recorded alongside it.
 
 NINJAM already generates a fresh 16-byte GUID for each audio interval (when the
 encoder writes a new interval header). We piggyback on it. The **first chunk**
@@ -201,8 +203,10 @@ wrapped in the standard 4-byte BE length prefix that every chunk uses — see
 ```
 Bytes 0–3   : 0x00 00 00 14         ← outer length prefix (20, big-endian)
 Bytes 4–7   : interval counter      ← uint32 big-endian
-Bytes 8–23  : audio channel-0 GUID  ← the GUID of the audio interval
-                                      recorded at the same instant
+Bytes 8–23  : audio interval GUID   ← the interval that just ended (N‑1), from
+                                      the lowest-index interval-mode channel
+                                      that uploaded it (see §10, "Audio GUID
+                                      source")
 ```
 
 On the receiver, audio decode state already tracks two GUIDs: the currently
@@ -294,8 +298,8 @@ The chunks, in order per interval:
 Chunk 1 — Sync marker (24 bytes total on the wire):
   [4B BE = 20]                   ← inner payload length
   [4B BE interval counter]       ← uint32, sender's interval index
-  [16B audio channel-0 GUID]     ← the 16 bytes from the audio interval
-                                   being recorded right now on this client
+  [16B audio interval GUID]      ← the audio interval that just ended (N‑1)
+                                   on this client (§6)
 
 Chunk 2 — SPS/PPS block:
   [4B BE = inner length]

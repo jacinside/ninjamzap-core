@@ -3661,10 +3661,10 @@ void NJClient::on_new_interval()
       RawDataSendWrite(m_video_guid, NULL, 0, true); // END previous
     RawDataSendBegin(m_video_guid, m_video_fourcc, m_video_chidx, 0); // BEGIN new
     m_video_interval_open = true;
-    // Send sync marker (20 bytes): [4 bytes big-endian m_sync_interval_cnt][16 bytes audio ch0 GUID].
+    // Send sync marker (20 bytes): [4 bytes big-endian m_sync_interval_cnt][16 bytes audio interval GUID].
     // Receiver matches the audio GUID to the audio decode queue to determine exact alignment.
     {
-      // Wire format: [4B BE total length=20][4B swap_count][16B audio ch0 GUID].
+      // Wire format: [4B BE total length=20][4B swap_count][16B audio interval GUID].
       // The 4-byte length prefix is REQUIRED so the receiver's reassembler can identify
       // logical frame boundaries when WRITEs span multiple chunks (large H.264 IDRs).
       // Dispatch path (line ~926) already skips +4 bytes when handing to the application,
