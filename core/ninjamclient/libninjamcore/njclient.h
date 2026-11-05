@@ -113,6 +113,9 @@ public:
   // basic configuration
   int   config_autosubscribe;
   int   config_savelocalaudio; // set 1 to save compressed files, set to 2 to save .wav files as well. 
+  int   config_savevideo; // with config_savelocalaudio>0: also keep each raw-data (video) download as
+                          // <workdir>/<hex0>/<guid>.<fourcc>, bytes as received (the sync marker with the
+                          // audio GUID is its first frame), plus a "video" line in clipsort.log. Default 0.
                                 // -1 makes it try to delete the remote .oggs as soon as possible
 
   float config_metronome,config_metronome_pan; // volume of metronome
@@ -370,6 +373,7 @@ protected:
     unsigned int fourcc;
     char username[256];
     int chidx;
+    FILE *archive_fp; // raw bytes of this download when the session archive keeps video
   };
   WDL_PtrList<RawDataDownloadTracker> m_rawdata_downloads;
 

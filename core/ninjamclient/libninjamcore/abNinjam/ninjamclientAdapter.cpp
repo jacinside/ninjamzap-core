@@ -733,7 +733,7 @@ void NinjamClientAdapter::processAudioOutN(
     }
 }
 
-bool NinjamClientAdapter::startSessionArchive(const char *dir) {
+bool NinjamClientAdapter::startSessionArchive(const char *dir, bool withVideo) {
     if (!client || !dir || !*dir) return false;
     NJClient *nj = client->gsNjClient();
     if (nj->config_savelocalaudio > 0) return false; // already archiving
@@ -743,6 +743,7 @@ bool NinjamClientAdapter::startSessionArchive(const char *dir) {
     // saving on last.
     nj->SetWorkDir(const_cast<char *>(dir));      // creates the 0..f subfolders
     nj->SetLogFile(const_cast<char *>("clipsort.log"));
+    nj->config_savevideo = withVideo ? 1 : 0;       // also keep raw video downloads (.H264)
     nj->config_savelocalaudio = 1;                 // keep every interval as .ogg
     return true;
 }
@@ -754,6 +755,7 @@ void NinjamClientAdapter::stopSessionArchive() {
     // Saving off first; intervals already being written finish normally.
     // The work dir is left as is (no other thread reads it while saving is off).
     nj->config_savelocalaudio = archivePrevSaveMode;
+    nj->config_savevideo = 0;
     nj->SetLogFile(nullptr);                        // closes clipsort.log
     // NJClient only writes the closing "end" line from its destructor; add it
     // so the folder is a complete session log like a disconnect leaves.
