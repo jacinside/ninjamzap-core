@@ -415,8 +415,13 @@ protected:
     // awaiting only: audio_guid is the GUID of this interval's own audio (it waits for
     // channel alignment), so the video plays when that audio plays, not one swap later.
     bool own_audio;
-    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), interval_seq(-1), active(false), pending_remaining(0), sender_seq(-1), total_frames(0), own_audio(false) { username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
-    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; interval_seq = -1; active = false; pending_remaining = 0; sender_seq = -1; total_frames = 0; own_audio = false; username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
+    // awaiting only, tagged GUIDs: the interval number of this video's own audio (the
+    // marker's interval + 1); it plays when the user's audio of that interval plays, matched
+    // by interval and session, so a skipped or reordered audio interval can't pair it with
+    // the wrong audio. -1 = match audio_guid as above.
+    int own_interval;
+    VideoRecvBuffer() : frameCount(0), fourcc(0), chidx(0), interval_seq(-1), active(false), pending_remaining(0), sender_seq(-1), total_frames(0), own_audio(false), own_interval(-1) { username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
+    void reset() { data.Resize(0); frameOffsets.Resize(0); frameCount = 0; fourcc = 0; chidx = 0; interval_seq = -1; active = false; pending_remaining = 0; sender_seq = -1; total_frames = 0; own_audio = false; own_interval = -1; username[0] = 0; memset(guid, 0, 16); memset(audio_guid, 0, 16); }
     void copyFrom(const VideoRecvBuffer &src) {
       fourcc = src.fourcc; chidx = src.chidx; active = src.active; frameCount = src.frameCount;
       memcpy(username, src.username, sizeof(username));
@@ -435,6 +440,7 @@ protected:
       sender_seq = src.sender_seq;
       total_frames = src.total_frames;
       own_audio = src.own_audio;
+      own_interval = src.own_interval;
     }
   };
 
@@ -511,6 +517,11 @@ protected:
   // 0: the user's audio with this guid is playing; 1, 2: it is queued that many
   // intervals ahead; -1: not in the queue.
   int audioQueuePosition(const char *username, const unsigned char *guid) const;
+  // The same for the user's tagged audio of interval `interval` from the session in
+  // `sessionGuid` (makeIntervalGuid). Not queued: -1, with *passed set when the queue already
+  // holds a later interval of that session (that audio was skipped or already played).
+  int audioQueuePositionOfInterval(const char *username, const unsigned char *sessionGuid,
+                                   unsigned int interval, bool *passed) const;
 
   VideoRecvState *findVideoStream(const char *username, int chidx);
   VideoRecvState *findOrCreateVideoStream(const char *username, int chidx);

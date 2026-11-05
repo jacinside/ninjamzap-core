@@ -1534,12 +1534,39 @@ int NJClient::Run() // nonzero if sleep ok
                     vs->append_active = false;
                     memset(vs->append_guid, 0, 16);
                   }
-                  // Burst detection: if next already has data when a new BEGIN arrives,
-                  // the sender is sending >1 interval per receiver interval (e.g., after
-                  // a toggle off/on). Discarding next keeps video aligned with audio
-                  // instead of queueing and falling further behind each burst.
+                  // A new BEGIN while `next` still holds the previous interval: two BEGINs
+                  // reached us before a swap. That happens when our network stalls and queued
+                  // intervals arrive together, or when the sender's boundary sits within a few
+                  // ms of our swap and jitter puts one BEGIN after a swap and the next before
+                  // the following one — not only when the sender runs ahead (a camera toggled
+                  // off and on). With the sync marker's audio GUID, `next` waits for its audio
+                  // like video whose audio is queued (awaiting): the swap plays it when that
+                  // audio plays, or drops it (AWAIT-DROP) if its audio already went. Without a
+                  // GUID there is nothing to match, so it is discarded as before.
                   if (vs->next.active) {
-                    SYNCLOG("video BURST: discarding next seq=%d fr=%d", vs->next.interval_seq, vs->next.frameCount);
+                    bool hasGuid = false;
+                    for (int gi = 0; gi < 16 && !hasGuid; gi++) hasGuid = vs->next.audio_guid[gi] != 0;
+                    if (hasGuid && vs->next.frameCount >= 1) {
+                      if (vs->awaiting_count == 2) {
+                        SYNCLOG("video AWAIT-DROP: key=%s vidSeq=%d (awaiting full)",
+                          vs->key, vs->awaiting[0].sender_seq);
+                        vs->awaiting[0].reset();
+                        vs->awaiting[0].copyFrom(vs->awaiting[1]);
+                        vs->awaiting[1].reset();
+                        vs->awaiting_count = 1;
+                      }
+                      VideoRecvBuffer &slot = vs->awaiting[vs->awaiting_count++];
+                      slot.reset();
+                      slot.copyFrom(vs->next);
+                      // Tagged: wait for its own audio (the marker's interval + 1) by number, so
+                      // an audio interval skipped meanwhile can't pair it with the wrong audio.
+                      unsigned int mi;
+                      if (intervalGuidTag(slot.audio_guid, &mi)) slot.own_interval = (int)(mi + 1);
+                      SYNCLOG("video BURST: next waits for its audio vidSeq=%d fr=%d vid=%02x%02x own=%d",
+                        vs->next.sender_seq, vs->next.frameCount, vs->next.audio_guid[0], vs->next.audio_guid[1], slot.own_interval);
+                    } else {
+                      SYNCLOG("video BURST: discarding next seq=%d fr=%d", vs->next.interval_seq, vs->next.frameCount);
+                    }
                     vs->next.reset();
                   }
                   vs->accumulating.reset();
@@ -2404,6 +2431,27 @@ void NJClient::releaseRawDownloads(const char *username)
     delete t;
     m_rawdata_downloads.Delete(i);
   }
+}
+
+int NJClient::audioQueuePositionOfInterval(const char *username, const unsigned char *sessionGuid,
+                                           unsigned int interval, bool *passed) const
+{
+  *passed = false;
+  const AudioQueueEntry *e = m_audio_queue.Get();
+  for (int i = 0; i < m_audio_queue.GetSize(); i++)
+  {
+    if (strcmp(e[i].username, username)) continue;
+    for (int qi = 0; qi < 3; qi++)
+    {
+      unsigned int t;
+      if (!e[i].has[qi] || !intervalGuidTag(e[i].guid[qi], &t) ||
+          memcmp(e[i].guid[qi] + kIntervalTagSession, sessionGuid + kIntervalTagSession, kIntervalTagSessionLen))
+        continue;
+      if (t == interval) return qi + e[i].hold;
+      if ((int)(t - interval) > 0) *passed = true;
+    }
+  }
+  return -1;
 }
 
 void NJClient::removeVideoStream(const char *username, int chidx)
@@ -3775,9 +3823,16 @@ void NJClient::on_new_interval()
     // swap); if its audio left the queue without playing, drop it.
     while (vs->awaiting_count > 0) {
       VideoRecvBuffer &aw = vs->awaiting[0];
-      const int pos = audioQueuePosition(vs->stream_username, aw.audio_guid);
+      bool passed = false;
+      const int pos = aw.own_interval >= 0 ?
+        audioQueuePositionOfInterval(vs->stream_username, aw.audio_guid, (unsigned int)aw.own_interval, &passed) :
+        audioQueuePosition(vs->stream_username, aw.audio_guid);
       if (pos > 0) break; // still queued: keep it, and everything behind it
-      if (pos == 0 && aw.own_audio) {
+      if (pos < 0 && aw.own_interval >= 0 && !passed) break; // its audio hasn't arrived yet
+      // Matched by its own audio: it plays now, and the video behind it (whose marker names
+      // that same audio) may still take the pending slot at this swap.
+      const bool ownMatch = aw.own_audio || aw.own_interval >= 0;
+      if (pos == 0 && ownMatch) {
         // its own audio plays from this swap: play now (like a PREV match)
         SYNCLOG("SWAP#%d video PLAY: key=%s match=ALIGNED vidSeq=%d frames=%d vid=%02x%02x (immediate → playing)",
           m_sync_interval_cnt, vs->key, aw.sender_seq, aw.frameCount, aw.audio_guid[0], aw.audio_guid[1]);
@@ -3808,7 +3863,7 @@ void NJClient::on_new_interval()
         vs->awaiting[a-1].copyFrom(vs->awaiting[a]);
       }
       vs->awaiting[--vs->awaiting_count].reset();
-      if (pos == 0) break; // one audio interval starts per swap
+      if (pos == 0 && !ownMatch) break; // pending is taken: one audio interval starts per swap
     }
 
     // Note: stale check on interval_seq was removed. Guid-based WRITE routing

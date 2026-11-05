@@ -281,6 +281,26 @@ playing is dropped. Two details matter:
   not by locking the audio state from the video path: the network thread takes
   the audio and video locks in the opposite order.
 
+### Two BEGINs before one swap
+
+The receiver evaluates `next` once per swap, so it expects one video BEGIN per
+interval. Two can arrive before a swap without the sender running ahead: the
+receiver's network stalls and the queued intervals arrive together, or the
+sender's boundary sits within a few ms of the receiver's swap and jitter puts one
+BEGIN just after a swap and the next just before the following one. Discarding
+the interval still in `next` loses a whole interval of video whose audio plays.
+
+When a BEGIN finds `next` occupied and that interval carries a marker GUID, it
+moves to an awaiting slot instead (the oldest awaiting interval goes if both are
+taken). With tagged audio GUIDs it waits for its **own** audio — the marker's
+interval + 1 of the same session — matched by interval number, not for the
+marker's GUID: during such a stall the receiver may skip an audio interval, and
+the marker's audio would then pair the video with the wrong interval. It plays
+when its own audio becomes `ds` (and the interval behind it may still take
+`pending` at that swap), and is dropped once the queue holds a later interval of
+that session. Without a marker GUID there is nothing to match, and `next` is
+discarded as before.
+
 ---
 
 ## 7. Wire format
