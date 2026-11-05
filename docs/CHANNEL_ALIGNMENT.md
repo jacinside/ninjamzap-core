@@ -56,7 +56,8 @@ the same session:
    to play, channels already waiting (step 3) and untagged downloads (the rest of
    an interval that started in voice chat).
 2. Target: the **earliest** of those intervals. If every channel behind the latest
-   one already has the latest interval queued, the target is the latest instead.
+   one already has the latest interval queued, the target is the latest instead —
+   unless every channel on the latest one only starts playing at this swap.
 3. A channel **ahead** of the target waits one swap: it keeps its download, plays
    silence, and plays it at the next swap, together with its siblings.
 4. A channel **behind** the target (only when the target is the latest, step 2)
@@ -75,9 +76,14 @@ Either way the cost is one interval of audio on the channels that move, once. A
 download that replaces a skipped one doesn't get the interval-boundary crossfade
 (128 samples), so a correction may click once.
 
-Channels leaving voice chat, (re)subscribed channels and channels that start
-sending mid-session need no special handling: their first tagged download is
-placed by the same rule.
+A channel that starts playing at this swap, after playing nothing (it starts
+sending mid-session, or its transmit is turned back on), never moves its siblings
+forward: its queue is empty, so it is ahead of channels that are not late, and
+skipping would drop an interval of their audio — and of the video matched to it.
+It waits one swap instead and joins them.
+
+Channels leaving voice chat and (re)subscribed channels are placed by the same rule
+from their first tagged download.
 
 Downloads from senders that don't tag their GUIDs keep the per-channel queues.
 
@@ -96,5 +102,6 @@ video. The receiver checks, for every displayed video frame, which interval each
 channel is playing, and that a channel that should sound is not missing. Plans:
 mute/unmute every channel at different points of the interval, voice chat on/off on
 several channels with channel 1 muted or sounding, a channel that only sounds in
-the last 15% of each interval, and a mix; at several receiver phases, with and without network jitter
+the last 15% of each interval, channels whose transmit is turned off and back on
+(`xmit`), and a mix; at several receiver phases, with and without network jitter
 (`tc netem`). Real intervals (13.7 s) via `docker/test-multi.cfg`: `make test-real`.

@@ -287,7 +287,7 @@ protected:
   void on_new_interval();
   void rejoinIntervalGrid(RemoteUser *user, int ch);
   int holdIntervalChannel(RemoteUser_Channel *chan, int swaps);
-  void alignUserChannels(RemoteUser *user);
+  void alignUserChannels(RemoteUser *user, unsigned int joined);
   double lateStartGuardMs() const;
   double lateStartAgeMs(RemoteUser *user) const;
   void makeIntervalGuid(unsigned char *guid, unsigned int interval, int chidx);
