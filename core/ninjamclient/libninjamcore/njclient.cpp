@@ -3666,19 +3666,24 @@ void NJClient::on_new_interval()
       marker[6] = (unsigned char)((m_sync_interval_cnt >> 8) & 0xFF);
       marker[7] = (unsigned char)(m_sync_interval_cnt & 0xFF);
       memset(marker + 8, 0, 16);
-      // Pick the GUID of the lowest-index audio channel that is actually broadcasting — NOT a
-      // hardcoded ch0. If ch0 is muted / not transmitting it has no interval GUID, so the receiver
-      // can't match the video to any audio it has and falls ~1 interval off (the "video follows ch0"
-      // bug). The video channel itself (flags & 0x10) is skipped.
-      Local_Channel *gch = 0;
+      // The GUID of the interval that just ended, from the lowest-index interval-mode audio
+      // channel that uploaded it (a non-zero m_curwritefile.guid), not ch0 alone: a channel
+      // with Transmit off has no GUID (it is zeroed when the channel stops), and neither has
+      // one that starts transmitting at this swap. Voice-chat / session channels (flags 2|4)
+      // keep their own intervals, and the video channel (0x10) carries no audio.
+      int gch = -1;
+      m_locchan_cs.Enter(); // DeleteLocalChannel frees channels under it
       for (int li = 0; li < m_locchannels.GetSize(); li++) {
         Local_Channel *lc = m_locchannels.Get(li);
-        if (lc && lc->broadcasting && !(lc->flags & 0x10) &&
-            (!gch || lc->channel_idx < gch->channel_idx))
-          gch = lc;
+        if (!lc || (lc->flags & (0x10|4|2)) || (gch >= 0 && lc->channel_idx > gch)) continue;
+        bool hasGuid = false;
+        for (int gi = 0; gi < 16 && !hasGuid; gi++) hasGuid = lc->m_curwritefile.guid[gi] != 0;
+        if (!hasGuid) continue;
+        memcpy(marker + 8, lc->m_curwritefile.guid, 16);
+        gch = lc->channel_idx;
       }
-      if (gch) memcpy(marker + 8, gch->m_curwritefile.guid, 16);
-      SYNCLOG("SEND video marker: swap=%d audioGuid=%02x%02x ch=%d", m_sync_interval_cnt, marker[8], marker[9], gch ? gch->channel_idx : -1);
+      m_locchan_cs.Leave();
+      SYNCLOG("SEND video marker: swap=%d audioGuid=%02x%02x ch=%d", m_sync_interval_cnt, marker[8], marker[9], gch);
       RawDataSendWrite(m_video_guid, marker, 24, false);
     }
     // Send cached SPS/PPS as second chunk so receiver can init decoder
