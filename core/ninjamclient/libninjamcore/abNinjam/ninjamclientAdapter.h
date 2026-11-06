@@ -73,6 +73,8 @@ public:
     void connect(const std::string& host, int port);
     void disconnect();
     bool isConnected() const;
+    // Largest send backlog since the last call (NJClient::TakeSendBacklogMax).
+    void takeSendBacklogMax(int *bytes, int *messages);
     void process();
     
     // Audio configuration and processing

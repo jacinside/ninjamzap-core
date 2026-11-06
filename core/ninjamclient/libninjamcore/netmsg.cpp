@@ -220,6 +220,15 @@ Net_Message *Net_Connection::Run(int *wantsleep)
   return retv;
 }
 
+int Net_Connection::GetSendBacklogBytes()
+{
+  int bytes = m_con ? m_con->send_bytes_in_queue() : 0;
+  Net_Message **q = (Net_Message **)m_sendq.Get();
+  const int n = GetSendQueueMessages();
+  for (int i = 0; q && i < n; i++) if (q[i]) bytes += q[i]->get_size();
+  return bytes;
+}
+
 int Net_Connection::Send(Net_Message *msg)
 {
   if (msg)

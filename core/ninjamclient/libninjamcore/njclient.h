@@ -140,6 +140,10 @@ public:
   enum { NJC_STATUS_DISCONNECTED=-3,NJC_STATUS_INVALIDAUTH=-2, NJC_STATUS_CANTCONNECT=-1, NJC_STATUS_OK=0, NJC_STATUS_PRECONNECT};
   int GetStatus();
 
+  // Largest send backlog Run() saw since the last call (bytes, messages), then reset: a slow
+  // uplink shows here before the queue fills and the connection drops.
+  void TakeSendBacklogMax(int *bytes, int *messages);
+
   void SetWorkDir(char *path);
   char *GetWorkDir() { return m_workdir.Get(); }
 
@@ -351,6 +355,7 @@ protected:
 
   WDL_Mutex m_users_cs, m_locchan_cs, m_log_cs, m_misc_cs;
   Net_Connection *m_netcon;
+  int m_sendBacklogMaxBytes, m_sendBacklogMaxMsgs;
   WDL_PtrList<RemoteUser> m_remoteusers;
   WDL_PtrList<RemoteDownload> m_downloads;
 

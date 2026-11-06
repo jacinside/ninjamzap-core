@@ -740,6 +740,7 @@ NJClient::NJClient()
 
   m_issoloactive=0;
   m_netcon=0;
+  m_sendBacklogMaxBytes=m_sendBacklogMaxMsgs=0;
 
   m_metro_chidx = 0;
   m_remote_chanoffs = 0;
@@ -1176,6 +1177,13 @@ static char getConfigStringQuoteChar(const char *p) // from WDL/projectcontext.c
   return 0;
 }
 
+void NJClient::TakeSendBacklogMax(int *bytes, int *messages)
+{
+  if (bytes) *bytes=m_sendBacklogMaxBytes;
+  if (messages) *messages=m_sendBacklogMaxMsgs;
+  m_sendBacklogMaxBytes=m_sendBacklogMaxMsgs=0;
+}
+
 int NJClient::Run() // nonzero if sleep ok
 {
   WDL_HeapBuf *p=0;
@@ -1215,6 +1223,11 @@ int NJClient::Run() // nonzero if sleep ok
   if (m_netcon)
   {
     Net_Message *msg=m_netcon->Run(&wantsleep);
+    {
+      const int backlog=m_netcon->GetSendBacklogBytes(), queued=m_netcon->GetSendQueueMessages();
+      if (backlog > m_sendBacklogMaxBytes) m_sendBacklogMaxBytes=backlog;
+      if (queued > m_sendBacklogMaxMsgs) m_sendBacklogMaxMsgs=queued;
+    }
     if (!msg)
     {
       if (m_netcon->GetStatus())

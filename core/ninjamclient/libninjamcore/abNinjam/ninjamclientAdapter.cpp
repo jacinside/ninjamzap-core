@@ -233,6 +233,11 @@ bool NinjamClientAdapter::isConnected() const {
     return connected;
 }
 
+void NinjamClientAdapter::takeSendBacklogMax(int *bytes, int *messages) {
+    std::lock_guard<std::mutex> lock(client->gsMtx());
+    client->gsNjClient()->TakeSendBacklogMax(bytes, messages);
+}
+
 void NinjamClientAdapter::process() {
     if (connected) {
         {

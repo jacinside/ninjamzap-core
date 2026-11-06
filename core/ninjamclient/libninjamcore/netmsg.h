@@ -119,6 +119,11 @@ class Net_Connection
     Net_Message *Run(int *wantsleep=0);
     int Send(Net_Message *msg); // -1 on error, i.e. queue full
     int GetStatus(); // returns <0 on error, 0 on normal, 1 on disconnect
+
+    // What hasn't gone out yet. On a slow uplink the queue grows to NET_CON_MAX_MESSAGES and the
+    // next Send fails the connection.
+    int GetSendQueueMessages() const { return m_sendq.Available() / (int)sizeof(Net_Message *); }
+    int GetSendBacklogBytes(); // queued messages + the socket's unsent bytes
     JNL_IConnection *GetConnection() { return m_con; }
 
     void SetKeepAlive(int interval)
