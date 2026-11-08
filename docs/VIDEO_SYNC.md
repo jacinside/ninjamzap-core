@@ -301,6 +301,23 @@ when its own audio becomes `ds` (and the interval behind it may still take
 that session. Without a marker GUID there is nothing to match, and `next` is
 discarded as before.
 
+### Voice chat
+
+NINJAM's voice-chat mode (channel flag `2`) has no interval delay: audio
+streams and plays as it arrives. Video follows it:
+
+- **Sender:** keep the same per-interval sequence (BEGIN, marker, SPS/PPS,
+  frames), but send each frame as soon as it's encoded, as in interval mode.
+  With no interval-mode audio the marker's GUID is zero (§10, GUID lifecycle).
+- **Receiver:** when the sender's audio channel is in voice-chat mode, don't
+  hold video for the interval swap: show each frame as it arrives, delayed by
+  the time the receiver's own audio path holds voice-chat audio before it's
+  heard. That delay belongs to the receiver, not the protocol: the reference
+  client buffers ~0.75 s (`VIDEO_LIVE_DELAY_MS`); a client whose audio
+  decoder waits for a fixed amount of data before playing has a delay that
+  depends on each sender's bitrate, and is best measured per channel, from
+  the first bytes received until they're heard.
+
 ---
 
 ## 7. Wire format
@@ -486,6 +503,32 @@ GUID before applying the outer-length parser.
   video would play an interval away from it. Both ends of the connection see
   the same 16 bytes; that identity is what makes the GUID match work at the
   receiver.
+- **Which interval, at the boundary** — the marker names the audio interval
+  that **just ended**, the one whose END goes out at this boundary, not the
+  one starting with it (§5 shows it as `marker(GUID of N-1)`). A client that
+  sends the new audio `UPLOAD_INTERVAL_BEGIN` before the video one has to keep
+  the previous audio GUID for the marker.
+- **Tie the video interval to the audio one** — a client that starts an audio
+  interval only when its encoder delivers the first bytes, rather than exactly
+  at the boundary, should start the video interval at that same moment, with
+  the GUID of the audio interval it closes. Video and audio then start on the
+  same event and the receiver pairs them as usual.
+- **No interval-mode audio** — with no audio channel uploading intervals
+  (transmit off, or only voice-chat / session channels), the interval
+  boundary alone starts each video interval, and the marker's audio GUID is
+  16 zero bytes. Receivers take a zero GUID as "nothing to match", never as a
+  GUID.
+
+### Identifying chunks (receiver)
+
+Chunks are told apart by their **position** in the interval: the first is the
+sync marker, the second the SPS/PPS block, the rest are frames. Nothing in a
+chunk says what it is, so don't guess from its first bytes: a frame starts with
+its first NAL's 4-byte length, and for some sizes those bytes read as a
+plausible SPS/PPS block. Taking a frame for one leaves the decoder with garbage
+for the rest of the interval. If a receiver has to check a chunk anyway (for
+example after losing its place in an interval), an SPS/PPS block is one whose
+two NALs are of types 7 and 8 and whose two lengths fill the chunk exactly.
 
 ### Decoder build / rebuild policy (receiver)
 
@@ -500,6 +543,13 @@ GUID before applying the outer-length parser.
   delivers them.
 
 ### Common pitfalls
+
+- **Encoder settings.** Receivers decode and show frames in the order they
+  arrive and don't reorder them, so the stream must have **no B-frames** (in
+  x264 terms: `bframes=0`, or a zero-latency tune). Keep one IDR per
+  interval, at its start: turning off scene-cut keyframes keeps each interval
+  close to its expected size, which matters for the server's buffers at
+  higher presets.
 
 - **Forgetting the outer 4-byte BE length prefix on chunks.** Every chunk
   payload (marker, SPS/PPS, every frame) must start with a 4-byte big-endian
