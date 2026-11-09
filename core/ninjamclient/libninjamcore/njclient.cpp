@@ -342,6 +342,8 @@ class RemoteUser_Channel
     // Output samples played as silence since playback caught up with a download still
     // streaming in (0 = playing fine). Logged as audio STARVE.
     double starve_samples;
+    // The same silence in ms, summed until NJClient::TakeUserLateMs reads it.
+    double late_ms;
 
     double decode_peak_vol[2];
 
@@ -1182,6 +1184,21 @@ void NJClient::TakeSendBacklogMax(int *bytes, int *messages)
   if (bytes) *bytes=m_sendBacklogMaxBytes;
   if (messages) *messages=m_sendBacklogMaxMsgs;
   m_sendBacklogMaxBytes=m_sendBacklogMaxMsgs=0;
+}
+
+double NJClient::TakeUserLateMs(int useridx)
+{
+  double worst=0.0;
+  m_users_cs.Enter();
+  RemoteUser *user=m_remoteusers.Get(useridx);
+  if (user)
+    for (int ch = 0; ch < MAX_USER_CHANNELS; ch ++)
+    {
+      if (user->channels[ch].late_ms > worst) worst=user->channels[ch].late_ms;
+      user->channels[ch].late_ms=0.0;
+    }
+  m_users_cs.Leave();
+  return worst;
 }
 
 int NJClient::Run() // nonzero if sleep ok
@@ -3293,7 +3310,11 @@ void NJClient::mixInChannel(RemoteUser *user, int chanidx,
         SYNCLOG("audio STARVE begin: user=%.*s ch=%d pos=%.2fs swapCnt=%d", sat?(int)(sat-sn):(int)strlen(sn), sn, chanidx,
                 m_interval_pos/(double)srate, m_sync_interval_cnt);
       }
-      if (streaming) userchan->starve_samples += len;
+      if (streaming)
+      {
+        userchan->starve_samples += len;
+        userchan->late_ms += len*1000.0/srate;
+      }
       userchan->dump_samples+=needed*srcnch - chan->decode_codec->Available();
       chan->decode_codec->Skip(chan->decode_codec->Available());
     }
@@ -4576,7 +4597,7 @@ void NJClient::SetWorkDir(char *path)
 }
 
 
-RemoteUser_Channel::RemoteUser_Channel() : volume(1.0f), pan(0.0f), out_chan_index(0), flags(0), dump_samples(0), ds(NULL), rejoin_grid(0), hold_swaps(0), starve_samples(0)
+RemoteUser_Channel::RemoteUser_Channel() : volume(1.0f), pan(0.0f), out_chan_index(0), flags(0), dump_samples(0), ds(NULL), rejoin_grid(0), hold_swaps(0), starve_samples(0), late_ms(0)
 {
   decode_peak_vol[0]=decode_peak_vol[1]=0.0;
   memset(next_ds,0,sizeof(next_ds));

@@ -143,6 +143,10 @@ public:
   // Largest send backlog Run() saw since the last call (bytes, messages), then reset: a slow
   // uplink shows here before the queue fills and the connection drops.
   void TakeSendBacklogMax(int *bytes, int *messages);
+  // Audio of remote user `useridx` played as silence since the last call because playback
+  // reached their download still streaming in (their uplink or our downlink can't keep up):
+  // ms on their worst channel, then reset.
+  double TakeUserLateMs(int useridx);
 
   void SetWorkDir(char *path);
   char *GetWorkDir() { return m_workdir.Get(); }

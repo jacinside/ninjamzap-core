@@ -238,6 +238,17 @@ void NinjamClientAdapter::takeSendBacklogMax(int *bytes, int *messages) {
     client->gsNjClient()->TakeSendBacklogMax(bytes, messages);
 }
 
+std::vector<std::pair<std::string, double>> NinjamClientAdapter::takeLateAudio() {
+    std::vector<std::pair<std::string, double>> out;
+    std::lock_guard<std::mutex> lock(client->gsMtx());
+    NJClient *nj = client->gsNjClient();
+    for (int i = 0; i < nj->GetNumUsers(); i++) {
+        const char *name = nj->GetUserState(i);
+        if (name) out.emplace_back(name, nj->TakeUserLateMs(i));
+    }
+    return out;
+}
+
 void NinjamClientAdapter::process() {
     if (connected) {
         {

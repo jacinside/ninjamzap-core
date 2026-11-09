@@ -75,6 +75,9 @@ public:
     bool isConnected() const;
     // Largest send backlog since the last call (NJClient::TakeSendBacklogMax).
     void takeSendBacklogMax(int *bytes, int *messages);
+    // Per remote user ("name@ip"): audio played as silence since the last call because it
+    // arrived late (NJClient::TakeUserLateMs), in ms.
+    std::vector<std::pair<std::string, double>> takeLateAudio();
     void process();
     
     // Audio configuration and processing
