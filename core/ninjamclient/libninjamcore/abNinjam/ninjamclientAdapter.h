@@ -78,6 +78,8 @@ public:
     // Per remote user ("name@ip"): audio played as silence since the last call because it
     // arrived late (NJClient::TakeUserLateMs), in ms.
     std::vector<std::pair<std::string, double>> takeLateAudio();
+    // Tests only: the NJClient underneath (tests/video-sync drives it directly).
+    NJClient *njClientForTest() { return client->gsNjClient(); }
     void process();
     
     // Audio configuration and processing

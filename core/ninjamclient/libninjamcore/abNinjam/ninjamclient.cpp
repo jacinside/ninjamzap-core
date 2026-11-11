@@ -204,6 +204,17 @@ NinjamClient::connect(ConnectionProperties *connectionProperties) {
     }
   }
 
+  // A previous connection that dropped by itself (no disconnect()): its thread has left its
+  // loop but is still to be joined, and `connected` still says yes, so the result below would
+  // be that connection's, not this attempt's (a reconnect reported "ok" without a server).
+  stopConnectionThread = true;
+  if (connectionThread) {
+    if (connectionThread->joinable()) connectionThread->join();
+    delete connectionThread;
+    connectionThread = nullptr;
+  }
+  connected = false;
+
   agree = 1;
   autoAgree = connectionProperties->gsAutoLicenseAgree();
   autoRemoteVolume = connectionProperties->gsAutoRemoteVolume();

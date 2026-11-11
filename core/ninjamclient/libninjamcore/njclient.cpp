@@ -1088,6 +1088,14 @@ void NJClient::Disconnect()
   delete m_netcon;
   m_netcon=0;
 
+  // So does the send backlog (TakeSendBacklogMax): a reconnect must not report the old socket's.
+  m_sendBacklogMaxBytes=m_sendBacklogMaxMsgs=0;
+
+  // Raw data still queued belongs to this connection's intervals.
+  m_rawdata_sendq_cs.Enter();
+  m_rawdata_sendq.Empty(true);
+  m_rawdata_sendq_cs.Leave();
+
   int x;
   for (x=0;x<m_remoteusers.GetSize(); x++) delete m_remoteusers.Get(x);
   m_remoteusers.Empty();
@@ -1146,6 +1154,7 @@ void NJClient::Connect(char *host, char *user, char *pass)
   m_netcon->attach(c);
 
   m_status=0;
+  m_in_auth=0; // a connection that died during its login must not count as answered here
 }
 
 int NJClient::GetStatus()
@@ -2258,8 +2267,8 @@ int NJClient::Run() // nonzero if sleep ok
   }
 #endif
 
-  // Drain raw data send queue
-  if (m_netcon)
+  // Drain raw data send queue (only once logged in: see RawDataSendBegin)
+  if (m_netcon && GetStatus() == NJC_STATUS_OK)
   {
     m_rawdata_sendq_cs.Enter();
     while (m_rawdata_sendq.GetSize())
@@ -2325,6 +2334,12 @@ void NJClient::RawDataSendBegin(unsigned char outGuid[16], unsigned int fourcc, 
 {
   WDL_RNG_bytes(outGuid, 16);
 
+  // The server takes a connection's first message as its answer to the login challenge, so
+  // nothing may reach a new socket before it ("invalid authorization reply"). A camera keeps
+  // going while the connection is lost or being re-established: its video is dropped, not kept
+  // for the next connection.
+  if (GetStatus() != NJC_STATUS_OK) return;
+
   RawDataQueueItem *item = new RawDataQueueItem;
   item->type = 0; // begin
   memcpy(item->guid, outGuid, 16);
@@ -2340,6 +2355,8 @@ void NJClient::RawDataSendBegin(unsigned char outGuid[16], unsigned int fourcc, 
 
 void NJClient::RawDataSendWrite(const unsigned char guid[16], const void *data, int dataLen, bool isEnd)
 {
+  if (GetStatus() != NJC_STATUS_OK) return; // see RawDataSendBegin
+
   RawDataQueueItem *item = new RawDataQueueItem;
   item->type = 1; // data/end
   memcpy(item->guid, guid, 16);
@@ -2607,7 +2624,7 @@ float NJClient::GetOutputPeak(int ch)
 
 void NJClient::ChatMessage_Send(const char *parm1, const char *parm2, const char *parm3, const char *parm4, const char *parm5)
 {
-  if (m_netcon)
+  if (m_netcon && GetStatus() == NJC_STATUS_OK) // nothing before the login (RawDataSendBegin)
   {
     mpb_chat_message m;
     m.parms[0]=parm1;
@@ -4535,7 +4552,8 @@ int NJClient::GetLocalChannelMonitoring(int ch, float *vol, float *pan, bool *mu
 
 void NJClient::NotifyServerOfChannelChange()
 {
-  if (m_netcon)
+  // Not before our answer to the login challenge (RawDataSendBegin); the login's reply sends it.
+  if (m_netcon && (m_in_auth || GetStatus() == NJC_STATUS_OK))
   {
     int x,idx=0;
     mpb_client_set_channel_info sci;
