@@ -522,6 +522,13 @@ public:
 // `ios26-multinal-video-fix.md`); short-term mitigations are lowering video bitrate or
 // keyframe interval so IDRs stay under 9216.
 #define MAX_ENC_BLOCKSIZE (8192+1024)
+
+// Video backs off before the send queue reaches NET_CON_MAX_MESSAGES, where the next Send fails
+// the connection: on a slow uplink (a struggling Wi-Fi) audio still fits, audio + video doesn't.
+// Past VIDEO_UPLINK_HOLD_MSGS the rest of the interval's frames are dropped (the next interval
+// starts with a keyframe); an interval that starts past VIDEO_UPLINK_SKIP_MSGS sends no video.
+#define VIDEO_UPLINK_HOLD_MSGS (NET_CON_MAX_MESSAGES/4)
+#define VIDEO_UPLINK_SKIP_MSGS (NET_CON_MAX_MESSAGES/8)
 #define DEFAULT_CONFIG_PREBUFFER  8192
 #define LIVE_PREBUFFER 128
 #define LIVE_ENC_BLOCKSIZE1 2048
@@ -1090,6 +1097,7 @@ void NJClient::Disconnect()
 
   // So does the send backlog (TakeSendBacklogMax): a reconnect must not report the old socket's.
   m_sendBacklogMaxBytes=m_sendBacklogMaxMsgs=0;
+  m_uplinkQueueMsgs.store(0, std::memory_order_relaxed);
 
   // Raw data still queued belongs to this connection's intervals.
   m_rawdata_sendq_cs.Enter();
@@ -1254,6 +1262,7 @@ int NJClient::Run() // nonzero if sleep ok
       const int backlog=m_netcon->GetSendBacklogBytes(), queued=m_netcon->GetSendQueueMessages();
       if (backlog > m_sendBacklogMaxBytes) m_sendBacklogMaxBytes=backlog;
       if (queued > m_sendBacklogMaxMsgs) m_sendBacklogMaxMsgs=queued;
+      m_uplinkQueueMsgs.store(queued, std::memory_order_relaxed);
     }
     if (!msg)
     {
@@ -2410,7 +2419,16 @@ void NJClient::StopVideoChannel()
 
 void NJClient::QueueVideoFrame(const void *data, int len)
 {
-  if (!m_video_active || !m_video_interval_open) return;
+  if (!m_video_active || !m_video_interval_open || m_video_uplink_hold.load()) return;
+  const int uplinkQueue = m_uplinkQueueMsgs.load(std::memory_order_relaxed);
+  if (uplinkQueue >= VIDEO_UPLINK_HOLD_MSGS)
+  {
+    // The uplink fell behind: drop the rest of this interval's frames (the video freezes until
+    // the next interval's keyframe) rather than let the queue fill and lose the connection.
+    m_video_uplink_hold.store(true);
+    SYNCLOG("video uplink busy: hold frames queue=%d", uplinkQueue);
+    return;
+  }
   if (data && len > 0)
     RawDataSendWrite(m_video_guid, data, len, false);
 }
@@ -3793,7 +3811,15 @@ void NJClient::on_new_interval()
   }
 
   // Video channel: end previous interval and begin new one (same thread as audio)
-  if (m_video_active) {
+  const int uplinkQueue = m_uplinkQueueMsgs.load(std::memory_order_relaxed);
+  if (m_video_active && uplinkQueue >= VIDEO_UPLINK_SKIP_MSGS) {
+    // The uplink is still behind: no video this interval, so audio keeps the connection.
+    if (m_video_interval_open)
+      RawDataSendWrite(m_video_guid, NULL, 0, true); // END previous
+    m_video_interval_open = false;
+    SYNCLOG("video uplink busy: skip interval swap=%d queue=%d", m_sync_interval_cnt, uplinkQueue);
+  } else if (m_video_active) {
+    m_video_uplink_hold.store(false);
     if (m_video_interval_open)
       RawDataSendWrite(m_video_guid, NULL, 0, true); // END previous
     RawDataSendBegin(m_video_guid, m_video_fourcc, m_video_chidx, 0); // BEGIN new

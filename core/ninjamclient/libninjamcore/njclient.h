@@ -66,6 +66,7 @@
 #endif
 #include <stdio.h>
 #include <time.h>
+#include <atomic>
 #include "WDL/wdlstring.h"
 #include "WDL/ptrlist.h"
 #include "WDL/jnetlib/jnetlib.h"
@@ -360,6 +361,9 @@ protected:
   WDL_Mutex m_users_cs, m_locchan_cs, m_log_cs, m_misc_cs;
   Net_Connection *m_netcon;
   int m_sendBacklogMaxBytes, m_sendBacklogMaxMsgs;
+  // Messages waiting to go out right now, set by Run() for the audio and camera threads (which
+  // must not touch m_netcon): video backs off before the queue fills (see QueueVideoFrame).
+  std::atomic<int> m_uplinkQueueMsgs{0};
   WDL_PtrList<RemoteUser> m_remoteusers;
   WDL_PtrList<RemoteDownload> m_downloads;
 
@@ -398,6 +402,8 @@ protected:
   int m_video_chidx;
   unsigned char m_video_guid[16];
   bool m_video_interval_open;
+  // The uplink fell behind during this video interval: its remaining frames are dropped.
+  std::atomic<bool> m_video_uplink_hold{false};
   WDL_HeapBuf m_video_spspps;
   WDL_Mutex m_video_spspps_cs;
 
