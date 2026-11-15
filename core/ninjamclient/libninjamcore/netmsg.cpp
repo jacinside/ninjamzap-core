@@ -102,7 +102,7 @@ Net_Message *Net_Connection::Run(int *wantsleep)
   time_t now=time(NULL);
 
   if (m_sendq.Available() > 0) m_last_send=now;
-  else if (now > m_last_send + m_keepalive)
+  else if (!m_keepalive_held && now > m_last_send + m_keepalive)
   {
     Net_Message *keepalive= new Net_Message;
     keepalive->set_type(MESSAGE_KEEPALIVE);
@@ -211,6 +211,7 @@ Net_Message *Net_Connection::Run(int *wantsleep)
   if (retv)
   {
     m_last_recv=now;
+    m_keepalive_held=false;
   }
   else if (now > m_last_recv + m_keepalive*3)
   {

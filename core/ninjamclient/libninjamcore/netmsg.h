@@ -92,6 +92,7 @@ class Net_Connection
   public:
     Net_Connection() : m_error(0),m_msgsendpos(-1), m_recvstate(0),m_recvmsg(0),m_con(0)
     { 
+      m_keepalive_held=false;
       SetKeepAlive(0);
     }
     ~Net_Connection();
@@ -132,6 +133,11 @@ class Net_Connection
       m_last_send=m_last_recv=time(NULL);
     }
 
+    // No keepalive until the peer's first message: a client must not speak before the login
+    // challenge, since the server takes its first message as the answer ("invalid
+    // authorization reply" when a keepalive got there first, on a slow network).
+    void HoldKeepAliveUntilFirstMessage() { m_keepalive_held=true; }
+
     void Kill(int quick=0);
 
   private:
@@ -141,6 +147,7 @@ class Net_Connection
     int m_msgsendpos;
 
     time_t m_last_send, m_last_recv;
+    bool m_keepalive_held;
 
     int m_recvstate;
     Net_Message *m_recvmsg;

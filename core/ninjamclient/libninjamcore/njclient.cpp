@@ -1152,6 +1152,7 @@ void NJClient::Connect(char *host, char *user, char *pass)
   c->connect(tmp.Get(),port);
   m_netcon = new Net_Connection;
   m_netcon->attach(c);
+  m_netcon->HoldKeepAliveUntilFirstMessage(); // the login answer must be our first message
 
   m_status=0;
   m_in_auth=0; // a connection that died during its login must not count as answered here
