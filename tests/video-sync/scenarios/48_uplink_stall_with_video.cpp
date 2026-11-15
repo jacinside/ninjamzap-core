@@ -8,9 +8,11 @@
 // (An uplink that stops completely for ~9 s is dropped by the server — keepalive 3 s × 3 —
 // whatever the client does; that's not this case.)
 //
-// Setup: a sender with audio and fast video connects through a local proxy; for kSlowMs the
-// proxy forwards the sender's bytes at kSlowBytesPerSec only (its downlink keeps flowing), then
-// at full speed again. A receiver is connected directly.
+// Setup: a sender with audio and fast video connects through a local proxy that forwards the
+// sender's bytes at kSlowBytesPerSec only (its downlink keeps flowing) until the video backs off
+// (kHoldAfterBackoffMs later) or the sender drops, at most kMaxSlowMs — the kernel's socket
+// buffers absorb a different amount first on each OS (a few hundred KB on macOS, several MB on
+// Linux). Then full speed again. A receiver is connected directly.
 // Verify: the sender stays connected, its video was dropped while the uplink was slow (the
 // queue never reached the limit), and video reaches the receiver again afterwards.
 #include <arpa/inet.h>
@@ -131,10 +133,11 @@ TEST_CASE("48_uplink_stall_with_video — a slow uplink drops video, not the con
   auto &log = videosync::SyncLogCapture::instance();
   log.clear();
 
-  const int kSlowMs = 20000;
+  const int kMaxSlowMs = 60000;
+  const int kHoldAfterBackoffMs = 3000; // still connected a while after backing off
   const int kSlowBytesPerSec = 16 * 1024; // audio fits, audio + video doesn't
   const int kFps = 60;
-  const int kFrameBytes = 2000; // small P-frames: one upload message each, as on the Mac
+  const int kFrameBytes = 6000; // one upload message each (< MAX_ENC_BLOCKSIZE)
 
   SlowUplinkProxy proxy(videosync::testenv::host, videosync::testenv::port);
 
@@ -186,9 +189,12 @@ TEST_CASE("48_uplink_stall_with_video — a slow uplink drops video, not the con
   sender.raw()->TakeSendBacklogMax(&bytes, &worstQueue); // reset
   proxy.setUplinkRate(kSlowBytesPerSec);
   bool connectedThroughout = true;
-  for (int t = 0; t < kSlowMs; t += 100) {
+  int backedOffAt = -1;
+  for (int t = 0; t < kMaxSlowMs; t += 100) {
     std::this_thread::sleep_for(100ms);
     if (sender.raw()->GetStatus() != NJClient::NJC_STATUS_OK) { connectedThroughout = false; break; }
+    if (backedOffAt < 0 && !log.match("video uplink busy").empty()) backedOffAt = t;
+    if (backedOffAt >= 0 && t - backedOffAt >= kHoldAfterBackoffMs) break;
   }
   sender.raw()->TakeSendBacklogMax(&bytes, &worstQueue);
   proxy.setUplinkRate(0);
@@ -199,7 +205,8 @@ TEST_CASE("48_uplink_stall_with_video — a slow uplink drops video, not the con
   stop.store(true);
   camera.join();
 
-  INFO("sender status=" << sender.raw()->GetStatus() << " worst queue=" << worstQueue
+  INFO("sender status=" << sender.raw()->GetStatus() << " backed off after " << backedOffAt
+                        << " ms, worst queue=" << worstQueue
                         << " msgs, " << bytes / 1024 << " KB; receiver frames: " << framesBeforeStall
                         << " in 3 s before, " << framesAfterStall << " in 6 s after");
   CHECK(connectedThroughout);
