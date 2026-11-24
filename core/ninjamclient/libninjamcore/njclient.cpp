@@ -1270,7 +1270,16 @@ int NJClient::Run() // nonzero if sleep ok
       {
         m_audio_enable=0;
         if (m_in_auth)  m_status=1001;
-        if (m_status > 0 && m_status < 1000) m_status=1002;
+        if (m_status > 0 && m_status < 1000)
+        {
+          // The server closed the socket (it replaced us with a new login under the same name,
+          // kicked us, or restarted) rather than the network going silent (keepalive timeout,
+          // m_error): say so, so a client can tell it apart from a lost connection.
+          JNL_IConnection *con=m_netcon->GetConnection();
+          if (m_netcon->GetStatus() == 1 && con && con->get_state() >= JNL_Connection::STATE_CLOSING)
+            m_errstr.Set("closed by server");
+          m_status=1002; // after the reason, so whoever sees the status reads it too
+        }
         if (m_status == 0) m_status=1000;
         return 1;
       }
