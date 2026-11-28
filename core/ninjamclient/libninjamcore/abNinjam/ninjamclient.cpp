@@ -111,6 +111,10 @@ NinjamClient::NinjamClient() {
 NinjamClient::~NinjamClient() {
   L_(ltrace) << "[NinjamClient] Entering NinjamClient::~NinjamClient";
   disconnect();
+  // Owned since construction (ninjamclient.h): without this every NinjamClient leaked its
+  // NJClient — a process that creates one per session (the stream bot) grew per session.
+  delete njClient;
+  njClient = nullptr;
 }
 
 void keepConnectionThread(NinjamClient *ninjamClient) {
